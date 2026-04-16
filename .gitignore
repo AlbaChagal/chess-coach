@@ -1,6 +1,7 @@
 /.agents/
 /.claude/
 /chesscoach.egg-info/
+/.idea/
 /.venv/
 /skills-lock.json
 /AGENTS.md
