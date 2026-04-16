@@ -13,7 +13,7 @@ Usage::
         --output  models/
 
 The CSV produced by ``prepare_squares.py`` is expected with columns:
-``image_path, label, split`` (split values: train / val / test).
+``occupancy_image_path, piece_image_path, label, split``.
 """
 
 from __future__ import annotations
@@ -90,9 +90,11 @@ class SquareDataset(Dataset[tuple[torch.Tensor, int]]):
         label_map: dict[str, int],
         transform: transforms.Compose,
         root: Path,
+        image_column: str = "image_path",
     ) -> None:
         self._root = root
         self._transform = transform
+        self._image_column = image_column
         self._samples: list[tuple[Path, int]] = []
         splits = (split,) if isinstance(split, str) else split
         self._splits = splits
@@ -105,7 +107,12 @@ class SquareDataset(Dataset[tuple[torch.Tensor, int]]):
                 label = row["label"]
                 if label not in label_map:
                     continue  # skip labels not in this classifier's scope
-                self._samples.append((root / row["image_path"], label_map[label]))
+                image_path = row.get(image_column) or row.get("image_path")
+                if not image_path:
+                    raise ValueError(
+                        f"Manifest row is missing image path column {image_column!r}"
+                    )
+                self._samples.append((root / image_path, label_map[label]))
 
     def __len__(self) -> int:
         return len(self._samples)
@@ -326,6 +333,7 @@ def train_model(
     learning_rate: float,
     class_weighted_loss: bool = False,
     upsample_minority_classes: bool = False,
+    image_column: str = "image_path",
     patience: int = 5,
     batch_size: int = _BATCH_SIZE,
     on_epoch: Callable[[int, dict[str, float]], None] | None = None,
@@ -345,6 +353,8 @@ def train_model(
         learning_rate: Optimizer learning rate.
         class_weighted_loss: Apply inverse-frequency class weighting in the loss.
         upsample_minority_classes: Upsample minority classes in the training loader.
+        image_column: CSV column that contains the square image path for this
+            model.
         patience: Early-stopping patience (epochs without val loss improvement).
         batch_size: Mini-batch size for DataLoader.
         on_epoch: Optional callback invoked after each epoch with
@@ -361,8 +371,16 @@ def train_model(
         label_map,
         _TRAIN_TRANSFORM,
         root,
+        image_column=image_column,
     )
-    val_ds = SquareDataset(csv_path, "val", label_map, _EVAL_TRANSFORM, root)
+    val_ds = SquareDataset(
+        csv_path,
+        "val",
+        label_map,
+        _EVAL_TRANSFORM,
+        root,
+        image_column=image_column,
+    )
     _log_dataset_summary(train_ds, name=f"{model_name} train", csv_path=csv_path, root=root)
     _log_dataset_summary(val_ds, name=f"{model_name} val", csv_path=csv_path, root=root)
     _validate_dataset_sizes(
@@ -644,6 +662,7 @@ def main(argv: list[str] | None = None) -> None:
         "input_size": _INPUT_SIZE,
         "architecture": "ResNet18",
         "dataset_csv": str(args.squares),
+        "image_column": "occupancy_image_path",
     }
     with mlops.training_run(mlops.EXPERIMENTS["occupancy"], "occupancy-train", occ_params):
         occ_history = train_model(
@@ -659,6 +678,7 @@ def main(argv: list[str] | None = None) -> None:
             learning_rate=args.lr,
             class_weighted_loss=True,
             upsample_minority_classes=False,
+            image_column="occupancy_image_path",
             on_epoch=lambda step, m: mlops.log_epoch_metrics(m, step),
         )
         mlops.log_artifact(occ_checkpoint)
@@ -677,11 +697,12 @@ def main(argv: list[str] | None = None) -> None:
         "batch_size": _BATCH_SIZE,
         "max_epochs": 20,
         "patience": 5,
-        "weighted_loss": False,
+        "weighted_loss": True,
         "upsample_minority_classes": True,
         "input_size": _INPUT_SIZE,
         "architecture": "ResNet18",
         "dataset_csv": str(args.squares),
+        "image_column": "piece_image_path",
     }
     with mlops.training_run(mlops.EXPERIMENTS["piece"], "piece-train", piece_params):
         piece_history = train_model(
@@ -695,8 +716,9 @@ def main(argv: list[str] | None = None) -> None:
             model_name="Piece model",
             class_names=piece_class_names,  # type: ignore[arg-type]
             learning_rate=args.lr,
-            class_weighted_loss=False,
+            class_weighted_loss=True,
             upsample_minority_classes=True,
+            image_column="piece_image_path",
             on_epoch=lambda step, m: mlops.log_epoch_metrics(m, step),
         )
         mlops.log_artifact(piece_checkpoint)

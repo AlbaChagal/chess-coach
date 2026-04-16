@@ -42,6 +42,10 @@ _STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
 _INPUT_SIZE = 100
 _FINETUNE_EPOCHS = 5
 _LR = 1e-4
+_OCCUPANCY_CONTEXT_SCALE = 1.0
+_PIECE_CROP_WIDTH_SCALE = 1.5
+_PIECE_CROP_HEIGHT_SCALE = 2.4
+_PIECE_CENTER_Y_OFFSET_SCALE = -0.45
 
 _PIECE_LABELS_NO_EMPTY: list[PieceLabel] = [lbl for lbl in PIECE_LABELS if lbl != "empty"]
 
@@ -76,23 +80,41 @@ def _fen_to_labels(fen_placement: str) -> list[PieceLabel]:
     return labels
 
 
-def _extract_squares(photo_path: Path) -> list[tuple[PieceLabel, torch.Tensor]]:
-    """Detect the board in a photo and return (label, tensor) pairs."""
+def _extract_squares(
+    photo_path: Path,
+) -> list[tuple[PieceLabel, torch.Tensor, torch.Tensor]]:
+    """Detect the board in a photo and return labeled occupancy/piece tensors."""
     LOGGER.debug(f"Extracting labeled squares from {photo_path}")
     bgr = cv2.imread(str(photo_path))
     if bgr is None:
         raise ValueError(f"Cannot read image: {photo_path}")
 
     warped = detect_board(bgr)
-    square_grid = split_into_squares(warped)
+    occupancy_grid = split_into_squares(
+        warped,
+        context_scale=_OCCUPANCY_CONTEXT_SCALE,
+    )
+    piece_grid = split_into_squares(
+        warped,
+        crop_width_scale=_PIECE_CROP_WIDTH_SCALE,
+        crop_height_scale=_PIECE_CROP_HEIGHT_SCALE,
+        center_y_offset_scale=_PIECE_CENTER_Y_OFFSET_SCALE,
+    )
     labels = _fen_to_labels(_STARTING_FEN)
 
-    samples: list[tuple[PieceLabel, torch.Tensor]] = []
-    flat_squares = [sq for row in square_grid for sq in row]
-    for sq, label in zip(flat_squares, labels):
-        rgb = cv2.cvtColor(sq, cv2.COLOR_BGR2RGB)
-        tensor: torch.Tensor = _TRANSFORM(rgb)  # type: ignore[assignment]
-        samples.append((label, tensor))
+    samples: list[tuple[PieceLabel, torch.Tensor, torch.Tensor]] = []
+    flat_occupancy_squares = [sq for row in occupancy_grid for sq in row]
+    flat_piece_squares = [sq for row in piece_grid for sq in row]
+    for occ_sq, piece_sq, label in zip(
+        flat_occupancy_squares,
+        flat_piece_squares,
+        labels,
+    ):
+        occ_rgb = cv2.cvtColor(occ_sq, cv2.COLOR_BGR2RGB)
+        piece_rgb = cv2.cvtColor(piece_sq, cv2.COLOR_BGR2RGB)
+        occupancy_tensor: torch.Tensor = _TRANSFORM(occ_rgb)  # type: ignore[assignment]
+        piece_tensor: torch.Tensor = _TRANSFORM(piece_rgb)  # type: ignore[assignment]
+        samples.append((label, occupancy_tensor, piece_tensor))
     return samples
 
 
@@ -194,7 +216,7 @@ def transfer_learn(
     )
 
     LOGGER.info("Extracting squares from photos")
-    samples: list[tuple[PieceLabel, torch.Tensor]] = []
+    samples: list[tuple[PieceLabel, torch.Tensor, torch.Tensor]] = []
     for photo in (photo1, photo2):
         LOGGER.info(f"Processing photo {photo.name}")
         samples.extend(_extract_squares(photo))
@@ -202,8 +224,9 @@ def transfer_learn(
     LOGGER.info(f"Extracted {len(samples)} labeled squares")
 
     # Build tensors
-    all_tensors = torch.stack([t for _, t in samples])
-    all_labels_str = [lbl for lbl, _ in samples]
+    occupancy_tensors = torch.stack([occ for _, occ, _ in samples])
+    piece_tensors_all = torch.stack([piece for _, _, piece in samples])
+    all_labels_str = [lbl for lbl, _, _ in samples]
 
     params: dict[str, object] = {
         "photo1": str(photo1),
@@ -233,7 +256,7 @@ def transfer_learn(
         occ_out = output_dir / "occupancy.pt"
         _finetune(
             occ_model,
-            all_tensors,
+            occupancy_tensors,
             occ_indices,
             device,
             occ_out,
@@ -249,7 +272,7 @@ def transfer_learn(
         if not piece_mask:
             LOGGER.warning("No occupied squares found; skipping piece model fine-tuning")
         else:
-            piece_tensors = all_tensors[piece_mask]
+            piece_tensors = piece_tensors_all[piece_mask]
             piece_indices = torch.tensor(
                 [_PIECE_LABELS_NO_EMPTY.index(all_labels_str[i]) for i in piece_mask],  # type: ignore[arg-type]
                 dtype=torch.long,

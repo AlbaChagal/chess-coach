@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import mlflow
+from mlflow.exceptions import MlflowException
 
 LOGGER = logging.getLogger(__name__)
 
@@ -100,7 +101,7 @@ def log_artifact(path: Path) -> None:
 def register_checkpoint(
     checkpoint_path: Path,
     registry_name: str,
-) -> str:
+) -> str | None:
     """Log *checkpoint_path* and register it in the MLflow Model Registry.
 
     The file is logged as an artifact and then registered under *registry_name*.
@@ -110,7 +111,8 @@ def register_checkpoint(
         registry_name: Registry model name (e.g. ``"OccupancyClassifier"``).
 
     Returns:
-        The registered model version string (``"1"``, ``"2"``, …).
+        The registered model version string (``"1"``, ``"2"``, …), or
+        ``None`` when the checkpoint could not be registered.
 
     Raises:
         RuntimeError: If there is no active MLflow run.
@@ -124,8 +126,15 @@ def register_checkpoint(
 
     mlflow.log_artifact(str(checkpoint_path))
     model_uri = f"runs:/{run_id}/{artifact_name}"
+    try:
+        registered = mlflow.register_model(model_uri=model_uri, name=registry_name)
+    except MlflowException as exc:
+        LOGGER.warning(
+            f"Skipping model registry registration for checkpoint={checkpoint_path.name} "
+            f"registry={registry_name} run_id={run_id}: {exc}"
+        )
+        return None
 
-    registered = mlflow.register_model(model_uri=model_uri, name=registry_name)
     version = registered.version
     LOGGER.info(
         f"Registered model checkpoint={checkpoint_path.name} "

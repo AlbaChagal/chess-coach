@@ -112,11 +112,17 @@ class PieceClassifier:
             self._occupancy_model = _load_model(occupancy_checkpoint, 2, self._device)
             self._piece_model = _load_model(piece_checkpoint, _NUM_PIECE_CLASSES, self._device)
 
-    def classify(self, square: np.ndarray) -> PieceLabel:
+    def classify(
+        self,
+        occupancy_square: np.ndarray,
+        piece_square: np.ndarray | None = None,
+    ) -> PieceLabel:
         """Classify a single board square.
 
         Args:
-            square: BGR numpy array of any size (resized to 100×100 internally).
+            occupancy_square: Square crop for the occupancy model.
+            piece_square: Optional square crop for the piece model. When omitted,
+                ``occupancy_square`` is reused.
 
         Returns:
             A :data:`~chesscoach.vision.types.PieceLabel` such as ``"wK"``
@@ -126,14 +132,17 @@ class PieceClassifier:
             LOGGER.debug("Stub classifier returning empty square")
             return "empty"
 
+        if piece_square is None:
+            piece_square = occupancy_square
+
         # Stage 1: occupancy
-        occupancy_idx = _infer(self._occupancy_model, square, self._device)
+        occupancy_idx = _infer(self._occupancy_model, occupancy_square, self._device)
         LOGGER.debug(f"Occupancy prediction class={occupancy_idx}")
         if occupancy_idx == 0:  # class 0 = empty
             return "empty"
 
         # Stage 2: piece type
-        piece_idx = _infer(self._piece_model, square, self._device)
+        piece_idx = _infer(self._piece_model, piece_square, self._device)
         label = _PIECE_LABELS_NO_EMPTY[piece_idx]
         LOGGER.debug(f"Piece prediction class={piece_idx} label={label}")
         return label

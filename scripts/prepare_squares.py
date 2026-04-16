@@ -1,11 +1,12 @@
-"""Convert raw chesscog board images + FEN labels into labeled 100×100 square images.
+"""Convert raw chesscog board images + FEN labels into task-specific square crops.
 
 For each board image the script:
 1. Runs :func:`~chesscoach.vision.board_detector.detect_board` to produce a
    warped 512×512 top-down view.
 2. Splits it into 64 squares.
 3. Labels each square from the FEN string.
-4. Saves the 100×100 square image under ``output/{label}/``.
+4. Saves occupancy and piece crops under ``output/occupancy/{label}/`` and
+   ``output/piece/{label}/``.
 5. Records the sample in a CSV manifest (``output/squares.csv``).
 
 Boards that fail detection are skipped and logged to stderr.
@@ -30,10 +31,11 @@ Expected input layout (chesscog convention)::
 Output layout::
 
     data/chesscog/squares/
-        wP/  wN/  wB/  wR/  wQ/  wK/
-        bP/  bN/  bB/  bR/  bQ/  bK/
-        empty/
-        squares.csv     # columns: image_path, label, split
+        occupancy/
+            wP/ ... empty/
+        piece/
+            wP/ ... empty/
+        squares.csv     # columns: occupancy_image_path, piece_image_path, label, split
 """
 
 from __future__ import annotations
@@ -44,16 +46,28 @@ import json
 import logging
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 import cv2
+import numpy as np
 from tqdm import tqdm
 
 from chesscoach.logging_utils import add_logging_args, configure_logging
-from chesscoach.vision.board_detector import BoardNotFoundError, detect_board, split_into_squares
+from chesscoach.vision.board_detector import (
+    BOARD_SIZE,
+    BoardNotFoundError,
+    detect_board,
+    split_into_squares,
+    warp_board_from_corners,
+)
 from chesscoach.vision.fen_builder import _LABEL_TO_FEN  # reuse the label mapping
 from chesscoach.vision.types import PIECE_LABELS, PieceLabel
 
 _SQUARE_SIZE = 100
+_OCCUPANCY_CONTEXT_SCALE = 1.0
+_PIECE_CROP_WIDTH_SCALE = 1.5
+_PIECE_CROP_HEIGHT_SCALE = 2.4
+_PIECE_CENTER_Y_OFFSET_SCALE = -0.45
 LOGGER = logging.getLogger(__name__)
 
 # Invert the label→FEN char map to get FEN char→label
@@ -61,6 +75,15 @@ _FEN_TO_LABEL: dict[str, PieceLabel] = {
     v: k for k, v in _LABEL_TO_FEN.items() if v != ""
 }
 _FEN_TO_LABEL["."] = "empty"
+_CANONICAL_CORNERS = np.array(
+    [
+        [0, 0],
+        [BOARD_SIZE - 1, 0],
+        [BOARD_SIZE - 1, BOARD_SIZE - 1],
+        [0, BOARD_SIZE - 1],
+    ],
+    dtype=np.float32,
+)
 
 
 def _fen_to_grid(fen_placement: str) -> list[list[PieceLabel]]:
@@ -101,6 +124,104 @@ def _read_fen_placement(image_path: Path) -> str | None:
     return fen.strip().split()[0]
 
 
+def _load_json_payload(image_path: Path) -> dict[str, Any] | None:
+    """Load the JSON sidecar payload when available."""
+    json_path = image_path.with_suffix(".json")
+    if not json_path.exists():
+        return None
+    payload = json.loads(json_path.read_text())
+    return payload if isinstance(payload, dict) else None
+
+
+def _square_center(square: str) -> np.ndarray:
+    """Return the canonical board-space center point of an algebraic square."""
+    file_idx = ord(square[0]) - ord("a")
+    rank_idx = 8 - int(square[1])
+    step = BOARD_SIZE / 8
+    return np.array(
+        [[(file_idx + 0.5) * step, (rank_idx + 0.5) * step]],
+        dtype=np.float32,
+    )
+
+
+def _cyclic_corner_orders(corners: np.ndarray) -> list[np.ndarray]:
+    """Return all cyclic orderings of the four board corners."""
+    center = corners.mean(axis=0)
+    angles = np.arctan2(corners[:, 1] - center[1], corners[:, 0] - center[0])
+    clockwise = corners[np.argsort(angles)]
+    orders: list[np.ndarray] = []
+    for base in (clockwise, clockwise[::-1]):
+        for shift in range(4):
+            orders.append(np.roll(base, -shift, axis=0).astype(np.float32))
+    return orders
+
+
+def _corner_order_score(
+    corners: np.ndarray,
+    pieces: list[dict[str, Any]],
+) -> float:
+    """Score a candidate corner ordering against annotated piece boxes."""
+    matrix = cv2.getPerspectiveTransform(_CANONICAL_CORNERS, corners.astype(np.float32))
+    total_distance = 0.0
+    n_scored = 0
+    for piece in pieces:
+        square = piece.get("square")
+        box = piece.get("box")
+        if not isinstance(square, str) or not isinstance(box, list) or len(box) != 4:
+            continue
+        x, y, w, h = box
+        box_center = np.array([[x + w / 2, y + h / 2]], dtype=np.float32)
+        projected = cv2.perspectiveTransform(_square_center(square)[None, :, :], matrix)[0]
+        total_distance += float(np.linalg.norm(projected[0] - box_center[0]))
+        n_scored += 1
+
+    return total_distance / n_scored if n_scored else float("inf")
+
+
+def _select_metadata_corners(payload: dict[str, Any]) -> np.ndarray | None:
+    """Infer the board corner order from JSON metadata."""
+    raw_corners = payload.get("corners")
+    raw_pieces = payload.get("pieces")
+    if not isinstance(raw_corners, list) or len(raw_corners) != 4:
+        return None
+    if not isinstance(raw_pieces, list) or not raw_pieces:
+        return None
+
+    corners = np.array(raw_corners, dtype=np.float32)
+    pieces = [piece for piece in raw_pieces if isinstance(piece, dict)]
+    if not pieces:
+        return None
+
+    best_order: np.ndarray | None = None
+    best_score = float("inf")
+    for order in _cyclic_corner_orders(corners):
+        score = _corner_order_score(order, pieces)
+        if score < best_score:
+            best_score = score
+            best_order = order
+
+    return best_order
+
+
+def _load_warped_board(image_path: Path, bgr: np.ndarray) -> np.ndarray:
+    """Load a board warp using JSON metadata when available, else detection."""
+    payload = _load_json_payload(image_path)
+    if payload is not None:
+        metadata_corners = _select_metadata_corners(payload)
+        if metadata_corners is not None:
+            LOGGER.debug(
+                f"Using JSON board corners for {image_path.name}: "
+                f"{metadata_corners.tolist()}"
+            )
+            return warp_board_from_corners(bgr, metadata_corners)
+        LOGGER.debug(
+            f"JSON metadata for {image_path.name} lacked usable board corners; "
+            "falling back to detector"
+        )
+
+    return detect_board(bgr)
+
+
 def _log_split_summary(split: str, counters: Counter[str]) -> None:
     """Log a compact per-split processing summary."""
     total_images = counters["total_images"]
@@ -134,8 +255,11 @@ def prepare_squares(input_dir: Path, output_dir: Path) -> None:
     """
     LOGGER.info(f"Preparing square dataset input={input_dir} output={output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
-    for label in PIECE_LABELS:
-        (output_dir / label).mkdir(exist_ok=True)
+    for variant in ("occupancy", "piece"):
+        variant_dir = output_dir / variant
+        variant_dir.mkdir(exist_ok=True)
+        for label in PIECE_LABELS:
+            (variant_dir / label).mkdir(exist_ok=True)
 
     csv_path = output_dir / "squares.csv"
     splits = ["train", "val", "test"]
@@ -145,7 +269,15 @@ def prepare_squares(input_dir: Path, output_dir: Path) -> None:
     split_counters: dict[str, Counter[str]] = {split: Counter() for split in splits}
 
     with csv_path.open("w", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=["image_path", "label", "split"])
+        writer = csv.DictWriter(
+            csv_file,
+            fieldnames=[
+                "occupancy_image_path",
+                "piece_image_path",
+                "label",
+                "split",
+            ],
+        )
         writer.writeheader()
 
         for split in splits:
@@ -185,7 +317,7 @@ def prepare_squares(input_dir: Path, output_dir: Path) -> None:
                     continue
 
                 try:
-                    warped = detect_board(bgr)
+                    warped = _load_warped_board(img_path, bgr)
                 except BoardNotFoundError as exc:
                     LOGGER.warning(
                         f"Skipping {img_path.name} because board was not found: {exc}"
@@ -204,16 +336,41 @@ def prepare_squares(input_dir: Path, output_dir: Path) -> None:
                     split_counters[split]["bad_fen"] += 1
                     continue
 
-                squares = split_into_squares(warped)
-                for row_idx, (sq_row, label_row) in enumerate(zip(squares, grid)):
-                    for col_idx, (sq, label) in enumerate(zip(sq_row, label_row)):
-                        resized = cv2.resize(sq, (_SQUARE_SIZE, _SQUARE_SIZE))
+                occupancy_squares = split_into_squares(
+                    warped,
+                    context_scale=_OCCUPANCY_CONTEXT_SCALE,
+                )
+                piece_squares = split_into_squares(
+                    warped,
+                    crop_width_scale=_PIECE_CROP_WIDTH_SCALE,
+                    crop_height_scale=_PIECE_CROP_HEIGHT_SCALE,
+                    center_y_offset_scale=_PIECE_CENTER_Y_OFFSET_SCALE,
+                )
+                for row_idx, label_row in enumerate(grid):
+                    for col_idx, label in enumerate(label_row):
                         sq_filename = f"{img_path.stem}_r{row_idx}c{col_idx}.jpg"
-                        sq_path = output_dir / label / sq_filename
-                        cv2.imwrite(str(sq_path), resized)
+                        occupancy_resized = cv2.resize(
+                            occupancy_squares[row_idx][col_idx],
+                            (_SQUARE_SIZE, _SQUARE_SIZE),
+                        )
+                        piece_resized = cv2.resize(
+                            piece_squares[row_idx][col_idx],
+                            (_SQUARE_SIZE, _SQUARE_SIZE),
+                        )
+                        occupancy_path = (
+                            output_dir / "occupancy" / label / sq_filename
+                        )
+                        piece_path = output_dir / "piece" / label / sq_filename
+                        cv2.imwrite(str(occupancy_path), occupancy_resized)
+                        cv2.imwrite(str(piece_path), piece_resized)
                         writer.writerow(
                             {
-                                "image_path": str(sq_path.relative_to(output_dir)),
+                                "occupancy_image_path": str(
+                                    occupancy_path.relative_to(output_dir)
+                                ),
+                                "piece_image_path": str(
+                                    piece_path.relative_to(output_dir)
+                                ),
                                 "label": label,
                                 "split": split,
                             }

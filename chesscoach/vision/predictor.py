@@ -81,11 +81,22 @@ def predict_fen(
     LOGGER.info("Starting FEN prediction")
     bgr = _to_bgr(image)
     warped = detect_board(bgr)
-    squares = split_into_squares(warped)
+    occupancy_squares = split_into_squares(warped, context_scale=1.0)
+    piece_squares = split_into_squares(
+        warped,
+        crop_width_scale=1.5,
+        crop_height_scale=2.4,
+        center_y_offset_scale=-0.45,
+    )
 
     grid: SquareGrid = []
-    for row_idx, row in enumerate(squares):
-        rank_labels: list[PieceLabel] = [classifier.classify(sq) for sq in row]
+    for row_idx, (occ_row, piece_row) in enumerate(
+        zip(occupancy_squares, piece_squares)
+    ):
+        rank_labels: list[PieceLabel] = [
+            classifier.classify(occ_square, piece_square)
+            for occ_square, piece_square in zip(occ_row, piece_row)
+        ]
         LOGGER.debug(f"Predicted rank {row_idx} labels: {rank_labels}")
         grid.append(rank_labels)
 

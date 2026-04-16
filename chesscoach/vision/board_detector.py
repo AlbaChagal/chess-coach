@@ -1,4 +1,4 @@
-"""Detect a chessboard in an image and warp it to a top-down 512×512 view.
+"""Detect a chessboard in an image and warp it to a top-down 1024×1024 view.
 
 Detection strategy (in order of preference):
 1. OpenCV ``findChessboardCorners`` — fast, very reliable on rendered/digital boards.
@@ -14,7 +14,7 @@ import logging
 import cv2
 import numpy as np
 
-BOARD_SIZE = 512
+BOARD_SIZE = 1024
 _SQUARE_SIZE = BOARD_SIZE // 8
 
 # Number of grid lines in each direction (8 squares → 9 lines)
@@ -32,13 +32,13 @@ class BoardNotFoundError(Exception):
 
 
 def detect_board(image: np.ndarray) -> np.ndarray:
-    """Detect a chessboard in *image* and return a warped 512×512 top-down view.
+    """Detect a chessboard in *image* and return a warped 1024×1024 top-down view.
 
     Args:
         image: BGR image as a numpy array (H×W×3, uint8).
 
     Returns:
-        Warped 512×512 BGR array with the board filling the frame, rank 8 at
+        Warped 1024×1024 BGR array with the board filling the frame, rank 8 at
         the top and file a at the left (white-at-bottom orientation assumed).
 
     Raises:
@@ -48,28 +48,84 @@ def detect_board(image: np.ndarray) -> np.ndarray:
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     corners = _find_board_corners(gray)
     LOGGER.debug(f"Detected board corners: {corners.tolist()}")
-    return _warp(image, corners)
+    return warp_board_from_corners(image, corners)
 
 
-def split_into_squares(board: np.ndarray) -> list[list[np.ndarray]]:
-    """Split a 512×512 warped board into 8×8 individual square images.
+def split_into_squares(
+    board: np.ndarray,
+    *,
+    context_scale: float | None = None,
+    crop_width_scale: float = 1.0,
+    crop_height_scale: float = 1.0,
+    center_x_offset_scale: float = 0.0,
+    center_y_offset_scale: float = 0.0,
+) -> list[list[np.ndarray]]:
+    """Split a warped board into 8×8 square-centered crops.
 
     Args:
-        board: 512×512 BGR array returned by :func:`detect_board`.
+        board: ``BOARD_SIZE`` × ``BOARD_SIZE`` BGR array returned by
+            :func:`detect_board`.
+        context_scale: Backward-compatible shorthand that sets both crop scales.
+        crop_width_scale: Crop width relative to one board square.
+        crop_height_scale: Crop height relative to one board square.
+        center_x_offset_scale: Horizontal shift of the crop center, measured in
+            square widths.
+        center_y_offset_scale: Vertical shift of the crop center, measured in
+            square heights. Negative values shift upward.
 
     Returns:
-        8×8 list of 64×64 BGR arrays.  Row 0 = rank 8, col 0 = file a.
+        8×8 list of equally-sized BGR arrays. Row 0 = rank 8, col 0 = file a.
     """
-    LOGGER.debug(f"Splitting warped board with shape={board.shape} into squares")
+    if context_scale is not None:
+        crop_width_scale = context_scale
+        crop_height_scale = context_scale
+    if crop_width_scale < 1.0:
+        raise ValueError(
+            f"crop_width_scale must be >= 1.0, got {crop_width_scale}"
+        )
+    if crop_height_scale < 1.0:
+        raise ValueError(
+            f"crop_height_scale must be >= 1.0, got {crop_height_scale}"
+        )
+
+    crop_width = max(_SQUARE_SIZE, int(round(_SQUARE_SIZE * crop_width_scale)))
+    crop_height = max(_SQUARE_SIZE, int(round(_SQUARE_SIZE * crop_height_scale)))
+    pad_x = crop_width // 2 + abs(int(round(center_x_offset_scale * _SQUARE_SIZE)))
+    pad_y = crop_height // 2 + abs(int(round(center_y_offset_scale * _SQUARE_SIZE)))
+    padded = cv2.copyMakeBorder(
+        board,
+        pad_y,
+        pad_y,
+        pad_x,
+        pad_x,
+        borderType=cv2.BORDER_REPLICATE,
+    )
+    LOGGER.debug(
+        f"Splitting warped board shape={board.shape} into square crops "
+        f"crop_width_scale={crop_width_scale} crop_height_scale={crop_height_scale} "
+        f"center_x_offset_scale={center_x_offset_scale} "
+        f"center_y_offset_scale={center_y_offset_scale} "
+        f"crop_size=({crop_width}, {crop_height})"
+    )
     squares: list[list[np.ndarray]] = []
     for row in range(8):
         rank_squares: list[np.ndarray] = []
         for col in range(8):
-            y1 = row * _SQUARE_SIZE
-            y2 = (row + 1) * _SQUARE_SIZE
-            x1 = col * _SQUARE_SIZE
-            x2 = (col + 1) * _SQUARE_SIZE
-            rank_squares.append(board[y1:y2, x1:x2])
+            center_y = (
+                row * _SQUARE_SIZE
+                + _SQUARE_SIZE / 2
+                + center_y_offset_scale * _SQUARE_SIZE
+            )
+            center_x = (
+                col * _SQUARE_SIZE
+                + _SQUARE_SIZE / 2
+                + center_x_offset_scale * _SQUARE_SIZE
+            )
+            y1 = int(round(center_y - crop_height / 2)) + pad_y
+            x1 = int(round(center_x - crop_width / 2)) + pad_x
+            y2 = y1 + crop_height
+            x2 = x1 + crop_width
+            rank_squares.append(padded[y1:y2, x1:x2])
         squares.append(rank_squares)
     return squares
 
@@ -345,8 +401,8 @@ def _ransac_grid_positions(
 # ---------------------------------------------------------------------------
 
 
-def _warp(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
-    """Perspective-warp *image* so that *corners* map to a 512×512 square."""
+def warp_board_from_corners(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
+    """Perspective-warp *image* so that *corners* map to the canonical board."""
     dst = np.array(
         [
             [0, 0],

@@ -168,6 +168,7 @@ def _train_one(
                     model_name=f"Occupancy[{cfg.name}]",
                     class_names=["empty", "occupied"],
                     learning_rate=cfg.lr,
+                    image_column="occupancy_image_path",
                     patience=cfg.patience,
                     batch_size=cfg.batch_size,
                     on_epoch=lambda step, m: mlops.log_epoch_metrics(m, step),
@@ -194,6 +195,9 @@ def _train_one(
                     model_name=f"Piece[{cfg.name}]",
                     class_names=list(_PIECE_LABELS_NO_EMPTY),  # type: ignore[arg-type]
                     learning_rate=cfg.lr,
+                    class_weighted_loss=True,
+                    upsample_minority_classes=True,
+                    image_column="piece_image_path",
                     patience=cfg.patience,
                     batch_size=cfg.batch_size,
                     on_epoch=lambda step, m: mlops.log_epoch_metrics(m, step),

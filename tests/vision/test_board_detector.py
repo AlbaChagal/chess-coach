@@ -64,6 +64,35 @@ def test_split_into_squares_shape(synthetic_board: np.ndarray) -> None:
             assert sq.shape == (sq_size, sq_size, 3)
 
 
+def test_split_into_squares_supports_context_padding(
+    synthetic_board: np.ndarray,
+) -> None:
+    warped = detect_board(synthetic_board)
+    sq_size = BOARD_SIZE // 8
+    squares = split_into_squares(warped, context_scale=2.0)
+    for row in squares:
+        for sq in row:
+            assert sq.shape == (sq_size * 2, sq_size * 2, 3)
+
+
+def test_split_into_squares_supports_asymmetric_piece_crops(
+    synthetic_board: np.ndarray,
+) -> None:
+    warped = detect_board(synthetic_board)
+    sq_size = BOARD_SIZE // 8
+    squares = split_into_squares(
+        warped,
+        crop_width_scale=1.5,
+        crop_height_scale=2.4,
+        center_y_offset_scale=-0.45,
+    )
+    expected_width = int(round(sq_size * 1.5))
+    expected_height = int(round(sq_size * 2.4))
+    for row in squares:
+        for sq in row:
+            assert sq.shape == (expected_height, expected_width, 3)
+
+
 def test_detect_board_perspective_warped() -> None:
     """Board with mild perspective warp should still be detected."""
     board = make_perspective_board(angle_deg=10.0)

@@ -83,11 +83,40 @@ def test_validate_dataset_files_rejects_missing_images(tmp_path: Path) -> None:
 def test_square_dataset_can_merge_train_and_test_splits(tmp_path: Path) -> None:
     csv_path = tmp_path / "squares.csv"
     with csv_path.open("w", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=["image_path", "label", "split"])
+        writer = csv.DictWriter(
+            csv_file,
+            fieldnames=[
+                "occupancy_image_path",
+                "piece_image_path",
+                "label",
+                "split",
+            ],
+        )
         writer.writeheader()
-        writer.writerow({"image_path": "empty/train.jpg", "label": "empty", "split": "train"})
-        writer.writerow({"image_path": "empty/val.jpg", "label": "empty", "split": "val"})
-        writer.writerow({"image_path": "empty/test.jpg", "label": "empty", "split": "test"})
+        writer.writerow(
+            {
+                "occupancy_image_path": "occupancy/empty/train.jpg",
+                "piece_image_path": "piece/empty/train.jpg",
+                "label": "empty",
+                "split": "train",
+            }
+        )
+        writer.writerow(
+            {
+                "occupancy_image_path": "occupancy/empty/val.jpg",
+                "piece_image_path": "piece/empty/val.jpg",
+                "label": "empty",
+                "split": "val",
+            }
+        )
+        writer.writerow(
+            {
+                "occupancy_image_path": "occupancy/empty/test.jpg",
+                "piece_image_path": "piece/empty/test.jpg",
+                "label": "empty",
+                "split": "test",
+            }
+        )
 
     dataset = SquareDataset(
         csv_path=csv_path,
@@ -95,6 +124,7 @@ def test_square_dataset_can_merge_train_and_test_splits(tmp_path: Path) -> None:
         label_map={"empty": 0},
         transform=transforms.Compose([]),
         root=tmp_path,
+        image_column="occupancy_image_path",
     )
 
     assert len(dataset) == 2
@@ -135,11 +165,40 @@ def test_make_class_weights_is_inverse_frequency() -> None:
 def test_make_weighted_sampler_upsamples_minority_class(tmp_path: Path) -> None:
     csv_path = tmp_path / "squares.csv"
     with csv_path.open("w", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=["image_path", "label", "split"])
+        writer = csv.DictWriter(
+            csv_file,
+            fieldnames=[
+                "occupancy_image_path",
+                "piece_image_path",
+                "label",
+                "split",
+            ],
+        )
         writer.writeheader()
-        writer.writerow({"image_path": "empty/a.jpg", "label": "empty", "split": "train"})
-        writer.writerow({"image_path": "empty/b.jpg", "label": "empty", "split": "train"})
-        writer.writerow({"image_path": "wP/c.jpg", "label": "wP", "split": "train"})
+        writer.writerow(
+            {
+                "occupancy_image_path": "occupancy/empty/a.jpg",
+                "piece_image_path": "piece/empty/a.jpg",
+                "label": "empty",
+                "split": "train",
+            }
+        )
+        writer.writerow(
+            {
+                "occupancy_image_path": "occupancy/empty/b.jpg",
+                "piece_image_path": "piece/empty/b.jpg",
+                "label": "empty",
+                "split": "train",
+            }
+        )
+        writer.writerow(
+            {
+                "occupancy_image_path": "occupancy/wP/c.jpg",
+                "piece_image_path": "piece/wP/c.jpg",
+                "label": "wP",
+                "split": "train",
+            }
+        )
 
     dataset = SquareDataset(
         csv_path=csv_path,
@@ -147,9 +206,44 @@ def test_make_weighted_sampler_upsamples_minority_class(tmp_path: Path) -> None:
         label_map={"empty": 0, "wP": 1},
         transform=transforms.Compose([]),
         root=tmp_path,
+        image_column="occupancy_image_path",
     )
 
     sampler = _make_weighted_sampler(dataset)
     weights = list(sampler.weights.tolist())
 
     assert weights == pytest.approx([0.5, 0.5, 1.0])
+
+
+def test_square_dataset_uses_requested_image_column(tmp_path: Path) -> None:
+    csv_path = tmp_path / "squares.csv"
+    with csv_path.open("w", newline="") as csv_file:
+        writer = csv.DictWriter(
+            csv_file,
+            fieldnames=[
+                "occupancy_image_path",
+                "piece_image_path",
+                "label",
+                "split",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "occupancy_image_path": "occupancy/wP/sample.jpg",
+                "piece_image_path": "piece/wP/sample.jpg",
+                "label": "wP",
+                "split": "train",
+            }
+        )
+
+    dataset = SquareDataset(
+        csv_path=csv_path,
+        split="train",
+        label_map={"wP": 0},
+        transform=transforms.Compose([]),
+        root=tmp_path,
+        image_column="piece_image_path",
+    )
+
+    assert dataset._samples[0][0] == tmp_path / "piece/wP/sample.jpg"

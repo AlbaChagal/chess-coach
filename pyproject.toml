@@ -7,9 +7,11 @@ name = "chesscoach"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
+    "anthropic>=0.96.0",
     "chess>=1.10",
     "mlflow>=3.11.1",
     "numpy>=2.4.4",
+    "openai>=2.32.0",
     "opencv-python>=4.13.0.92",
     "optuna>=4.8.0",
     "optuna-integration>=4.8.0",

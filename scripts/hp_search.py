@@ -153,6 +153,7 @@ def _run_trial(
                     model_name=f"Occupancy[trial={trial_idx}]",
                     class_names=["empty", "occupied"],
                     learning_rate=lr,
+                    image_column="occupancy_image_path",
                     patience=patience,
                     on_epoch=lambda step, m: mlops.log_epoch_metrics(m, step),
                 )
@@ -193,6 +194,9 @@ def _run_trial(
                     model_name=f"Piece[trial={trial_idx}]",
                     class_names=piece_class_names,  # type: ignore[arg-type]
                     learning_rate=lr,
+                    class_weighted_loss=True,
+                    upsample_minority_classes=True,
+                    image_column="piece_image_path",
                     patience=patience,
                     on_epoch=lambda step, m: mlops.log_epoch_metrics(m, step),
                 )
