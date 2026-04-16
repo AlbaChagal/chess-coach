@@ -1,0 +1,10 @@
+/.agents/
+/.claude/
+/chesscoach.egg-info/
+/.venv/
+/skills-lock.json
+/AGENTS.md
+/CLAUDE.md
+/data/
+/models/
+/scripts/download_dataset.py
