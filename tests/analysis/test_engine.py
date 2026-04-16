@@ -21,7 +21,6 @@ def _make_pov_mate(mate: int) -> chess.engine.PovScore:
 
 
 def _make_info(pv_ucis: list[str], score: chess.engine.PovScore, depth: int = 20):
-    board = chess.Board()
     pv = [chess.Move.from_uci(u) for u in pv_ucis]
     return {"pv": pv, "score": score, "depth": depth}
 

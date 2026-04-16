@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -29,6 +32,7 @@ def load_csv(path: Path) -> list[BoardSample]:
         ValueError: If a required column is missing.
     """
     samples: list[BoardSample] = []
+    LOGGER.debug(f"Reading benchmark CSV dataset from {path}")
     with path.open(newline="") as f:
         reader = csv.DictReader(f)
         if reader.fieldnames is None or not {
@@ -47,6 +51,7 @@ def load_csv(path: Path) -> list[BoardSample]:
                     fen_placement=fen_placement,
                 )
             )
+    LOGGER.info(f"Loaded {len(samples)} samples from CSV dataset {path}")
     return samples
 
 
@@ -59,11 +64,14 @@ def load_json(path: Path) -> list[BoardSample]:
     Returns:
         List of :class:`BoardSample` instances.
     """
+    LOGGER.debug(f"Reading benchmark JSON dataset from {path}")
     data: list[dict[str, str]] = json.loads(path.read_text())
-    return [
+    samples = [
         BoardSample(
             image_path=Path(item["image_path"]),
             fen_placement=item["fen"].split()[0],
         )
         for item in data
     ]
+    LOGGER.info(f"Loaded {len(samples)} samples from JSON dataset {path}")
+    return samples

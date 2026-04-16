@@ -1,6 +1,10 @@
 """Convert an 8x8 grid of piece labels to a FEN piece-placement string."""
 
+import logging
+
 from chesscoach.vision.types import PieceLabel, SquareGrid
+
+LOGGER = logging.getLogger(__name__)
 
 # Maps our PieceLabel notation to FEN characters
 _LABEL_TO_FEN: dict[PieceLabel, str] = {
@@ -46,4 +50,6 @@ def build_fen(grid: SquareGrid) -> str:
         if empty_count:
             rank_str += str(empty_count)
         ranks.append(rank_str)
-    return "/".join(ranks)
+    fen = "/".join(ranks)
+    LOGGER.debug(f"Built FEN placement: {fen}")
+    return fen

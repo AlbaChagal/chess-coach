@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import cv2
@@ -14,11 +15,13 @@ from chesscoach.vision.piece_classifier import PieceClassifier
 from chesscoach.vision.types import PieceLabel, SquareGrid
 
 _default_classifier: PieceClassifier | None = None
+LOGGER = logging.getLogger(__name__)
 
 
 def _get_default_classifier() -> PieceClassifier:
     global _default_classifier
     if _default_classifier is None:
+        LOGGER.info("Initializing default piece classifier")
         _default_classifier = PieceClassifier()
     return _default_classifier
 
@@ -26,6 +29,7 @@ def _get_default_classifier() -> PieceClassifier:
 def _to_bgr(image: bytes | Path | PILImage.Image) -> np.ndarray:
     """Convert any supported input type to a BGR numpy array."""
     if isinstance(image, (bytes, bytearray)):
+        LOGGER.debug("Decoding board image from raw bytes")
         arr = np.frombuffer(image, dtype=np.uint8)
         bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if bgr is None:
@@ -33,12 +37,14 @@ def _to_bgr(image: bytes | Path | PILImage.Image) -> np.ndarray:
         return bgr
 
     if isinstance(image, Path):
+        LOGGER.debug(f"Loading board image from path: {image}")
         bgr = cv2.imread(str(image))
         if bgr is None:
             raise ValueError(f"Could not read image file: {image}")
         return bgr
 
     # PIL.Image
+    LOGGER.debug("Converting board image from PIL.Image")
     rgb = np.array(image.convert("RGB"))
     return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
@@ -72,13 +78,17 @@ def predict_fen(
     if classifier is None:
         classifier = _get_default_classifier()
 
+    LOGGER.info("Starting FEN prediction")
     bgr = _to_bgr(image)
     warped = detect_board(bgr)
     squares = split_into_squares(warped)
 
     grid: SquareGrid = []
-    for row in squares:
+    for row_idx, row in enumerate(squares):
         rank_labels: list[PieceLabel] = [classifier.classify(sq) for sq in row]
+        LOGGER.debug(f"Predicted rank {row_idx} labels: {rank_labels}")
         grid.append(rank_labels)
 
-    return build_fen(grid)
+    fen = build_fen(grid)
+    LOGGER.info(f"Finished FEN prediction: {fen}")
+    return fen

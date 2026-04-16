@@ -8,8 +8,11 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "chess>=1.10",
+    "mlflow>=3.11.1",
     "numpy>=2.4.4",
     "opencv-python>=4.13.0.92",
+    "optuna>=4.8.0",
+    "optuna-integration>=4.8.0",
     "pillow>=12.2.0",
     "requests>=2.33.1",
     "torch>=2.11.0",
@@ -29,6 +32,9 @@ dev = [
 markers = [
     "integration: requires stockfish binary installed on the system",
 ]
+
+[tool.setuptools.packages.find]
+include = ["chesscoach*"]
 
 [dependency-groups]
 dev = [

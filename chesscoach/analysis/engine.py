@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
+
 import chess
 import chess.engine
 
 from chesscoach.analysis.models import MoveAnalysis
 
 CONTINUATION_MOVES = 3
+LOGGER = logging.getLogger(__name__)
 
 
 class ChessEngine:
@@ -15,6 +18,7 @@ class ChessEngine:
         self._engine: chess.engine.SimpleEngine | None = None
 
     def __enter__(self) -> "ChessEngine":
+        LOGGER.debug(f"Opening engine at {self._engine_path}")
         self._engine = chess.engine.SimpleEngine.popen_uci(self._engine_path)
         return self
 
@@ -23,20 +27,28 @@ class ChessEngine:
 
     def close(self) -> None:
         if self._engine is not None:
+            LOGGER.debug(f"Closing engine at {self._engine_path}")
             self._engine.quit()
             self._engine = None
 
     def get_best_moves(self, board: chess.Board, n: int = 3) -> list[MoveAnalysis]:
         owned = self._engine is None
         if owned:
+            LOGGER.debug(f"Opening engine on demand at {self._engine_path}")
             self._engine = chess.engine.SimpleEngine.popen_uci(self._engine_path)
         try:
+            LOGGER.info(
+                f"Requesting engine analysis depth={self._depth} multipv={n} "
+                f"fen={board.fen()}"
+            )
             infos = self._engine.analyse(
                 board,
                 chess.engine.Limit(depth=self._depth),
                 multipv=n,
             )
-            return [self._info_to_analysis(board, info) for info in infos]
+            analyses = [self._info_to_analysis(board, info) for info in infos]
+            LOGGER.debug(f"Engine returned {len(analyses)} principal variations")
+            return analyses
         finally:
             if owned:
                 self.close()
@@ -60,6 +72,10 @@ class ChessEngine:
 
         depth: int = info.get("depth", 0)
         continuation = self._extract_continuation(board, pv)
+        LOGGER.debug(
+            f"Converted engine info to analysis move={move_uci} depth={depth} "
+            f"score_cp={score_cp} score_mate={score_mate}"
+        )
 
         return MoveAnalysis(
             move_san=move_san,

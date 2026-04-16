@@ -1,4 +1,3 @@
-import pytest
 from chesscoach.analysis.models import MoveAnalysis
 
 

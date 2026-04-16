@@ -22,6 +22,8 @@ Expected accuracy gain: 5–10% board accuracy on the user's specific piece set.
 from __future__ import annotations
 
 import argparse
+import logging
+from collections.abc import Callable
 from pathlib import Path
 
 import cv2
@@ -30,6 +32,9 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from torchvision import models, transforms
 
+from chesscoach import mlops
+from chesscoach.logging_utils import add_logging_args, configure_logging
+from chesscoach.torch_utils import select_device
 from chesscoach.vision.board_detector import detect_board, split_into_squares
 from chesscoach.vision.types import PIECE_LABELS, PieceLabel
 
@@ -56,6 +61,7 @@ _FEN_CHAR_TO_LABEL: dict[str, PieceLabel] = {
     "P": "wP", "N": "wN", "B": "wB", "R": "wR", "Q": "wQ", "K": "wK",
     "p": "bP", "n": "bN", "b": "bB", "r": "bR", "q": "bQ", "k": "bK",
 }
+LOGGER = logging.getLogger(__name__)
 
 
 def _fen_to_labels(fen_placement: str) -> list[PieceLabel]:
@@ -72,6 +78,7 @@ def _fen_to_labels(fen_placement: str) -> list[PieceLabel]:
 
 def _extract_squares(photo_path: Path) -> list[tuple[PieceLabel, torch.Tensor]]:
     """Detect the board in a photo and return (label, tensor) pairs."""
+    LOGGER.debug(f"Extracting labeled squares from {photo_path}")
     bgr = cv2.imread(str(photo_path))
     if bgr is None:
         raise ValueError(f"Cannot read image: {photo_path}")
@@ -90,6 +97,10 @@ def _extract_squares(photo_path: Path) -> list[tuple[PieceLabel, torch.Tensor]]:
 
 
 def _load_model(checkpoint: Path, num_classes: int, device: torch.device) -> nn.Module:
+    LOGGER.info(
+        f"Loading transfer-learning model architecture=ResNet18 "
+        f"checkpoint={checkpoint} num_classes={num_classes} device={device}"
+    )
     model = models.resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, num_classes)
     state = torch.load(str(checkpoint), map_location=device)
@@ -103,6 +114,8 @@ def _finetune(
     class_indices: torch.Tensor,
     device: torch.device,
     output_path: Path,
+    metric_key: str = "loss",
+    on_epoch: Callable[[int, dict[str, float]], None] | None = None,
 ) -> None:
     """Fine-tune the final FC layer only and save the checkpoint."""
     # Freeze all layers except the final FC
@@ -117,17 +130,32 @@ def _finetune(
     criterion = nn.CrossEntropyLoss()
     dataset = TensorDataset(tensors, class_indices)
     loader = DataLoader(dataset, batch_size=32, shuffle=True)
+    LOGGER.info(
+        f"Fine-tuning model={model.__class__.__name__} samples={len(dataset)} "
+        f"batch_size=32 output={output_path}"
+    )
 
     for epoch in range(1, _FINETUNE_EPOCHS + 1):
         epoch_loss = 0.0
-        for images, labels in loader:
+        for step, (images, labels) in enumerate(loader, start=1):
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
             loss = criterion(model(images), labels)
             loss.backward()
             optimizer.step()
             epoch_loss += loss.item() * len(images)
-        print(f"  epoch {epoch}/{_FINETUNE_EPOCHS}  loss={epoch_loss / len(dataset):.4f}")
+            if LOGGER.isEnabledFor(logging.DEBUG) and step % 100 == 0:
+                LOGGER.debug(
+                    f"Transfer fine-tune epoch={epoch} step={step}/{len(loader)} "
+                    f"batch_loss={loss.item():.4f}"
+                )
+        avg_loss = epoch_loss / len(dataset)
+        LOGGER.info(
+            f"Transfer fine-tune epoch {epoch}/{_FINETUNE_EPOCHS} "
+            f"loss={avg_loss:.4f}"
+        )
+        if on_epoch is not None:
+            on_epoch(epoch, {metric_key: round(avg_loss, 5)})
 
     # Restore all params to requires_grad=True before saving
     for param in model.parameters():
@@ -135,7 +163,7 @@ def _finetune(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), str(output_path))
-    print(f"  Saved to {output_path}")
+    LOGGER.info(f"Saved fine-tuned checkpoint to {output_path}")
 
 
 def transfer_learn(
@@ -144,6 +172,8 @@ def transfer_learn(
     occupancy_model_path: Path,
     piece_model_path: Path,
     output_dir: Path,
+    occupancy_run_id: str | None = None,
+    piece_run_id: str | None = None,
 ) -> None:
     """Fine-tune both models on 2 starting-position photos.
 
@@ -153,46 +183,91 @@ def transfer_learn(
         occupancy_model_path: Pre-trained occupancy checkpoint.
         piece_model_path: Pre-trained piece checkpoint.
         output_dir: Directory to save the custom checkpoints.
+        occupancy_run_id: Optional MLflow run ID of the base occupancy model.
+        piece_run_id: Optional MLflow run ID of the base piece model.
     """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
+    device = select_device()
+    LOGGER.info(
+        f"Starting transfer learning photo1={photo1} photo2={photo2} "
+        f"occupancy_model={occupancy_model_path} piece_model={piece_model_path} "
+        f"output={output_dir} device={device}"
+    )
 
-    print("\nExtracting squares from photos …")
+    LOGGER.info("Extracting squares from photos")
     samples: list[tuple[PieceLabel, torch.Tensor]] = []
     for photo in (photo1, photo2):
-        print(f"  {photo.name}")
+        LOGGER.info(f"Processing photo {photo.name}")
         samples.extend(_extract_squares(photo))
 
-    print(f"  {len(samples)} labeled squares extracted.")
+    LOGGER.info(f"Extracted {len(samples)} labeled squares")
 
     # Build tensors
     all_tensors = torch.stack([t for _, t in samples])
     all_labels_str = [lbl for lbl, _ in samples]
 
-    # --- Occupancy fine-tuning ---
-    print("\n=== Fine-tuning occupancy model ===")
-    occ_model = _load_model(occupancy_model_path, 2, device)
-    occ_indices = torch.tensor(
-        [0 if lbl == "empty" else 1 for lbl in all_labels_str], dtype=torch.long
-    )
-    _finetune(occ_model, all_tensors, occ_indices, device, output_dir / "occupancy.pt")
+    params: dict[str, object] = {
+        "photo1": str(photo1),
+        "photo2": str(photo2),
+        "occupancy_source": str(occupancy_model_path),
+        "piece_source": str(piece_model_path),
+        "finetune_epochs": _FINETUNE_EPOCHS,
+        "lr": _LR,
+        "n_squares": len(samples),
+    }
 
-    # --- Piece fine-tuning (non-empty squares only) ---
-    print("\n=== Fine-tuning piece model ===")
-    piece_model = _load_model(piece_model_path, 12, device)
-    piece_mask = [i for i, lbl in enumerate(all_labels_str) if lbl != "empty"]
-    if not piece_mask:
-        print("  No occupied squares found — skipping piece model fine-tuning.")
-    else:
-        piece_tensors = all_tensors[piece_mask]
-        piece_indices = torch.tensor(
-            [_PIECE_LABELS_NO_EMPTY.index(all_labels_str[i]) for i in piece_mask],  # type: ignore[arg-type]
-            dtype=torch.long,
+    with mlops.training_run(mlops.EXPERIMENTS["transfer"], "transfer-learn", params) as run:
+        import mlflow as _mlflow
+
+        if occupancy_run_id:
+            _mlflow.set_tag("source_occupancy_run", occupancy_run_id)
+        if piece_run_id:
+            _mlflow.set_tag("source_piece_run", piece_run_id)
+        _ = run  # keep reference
+
+        # --- Occupancy fine-tuning ---
+        LOGGER.info("=== Fine-tuning occupancy model ===")
+        occ_model = _load_model(occupancy_model_path, 2, device)
+        occ_indices = torch.tensor(
+            [0 if lbl == "empty" else 1 for lbl in all_labels_str], dtype=torch.long
         )
-        _finetune(piece_model, piece_tensors, piece_indices, device, output_dir / "piece.pt")
+        occ_out = output_dir / "occupancy.pt"
+        _finetune(
+            occ_model,
+            all_tensors,
+            occ_indices,
+            device,
+            occ_out,
+            metric_key="occ_loss",
+            on_epoch=lambda step, m: mlops.log_epoch_metrics(m, step),
+        )
+        mlops.log_artifact(occ_out)
 
-    print("\nTransfer learning complete.")
-    print(f"  Custom checkpoints saved to {output_dir}")
+        # --- Piece fine-tuning (non-empty squares only) ---
+        LOGGER.info("=== Fine-tuning piece model ===")
+        piece_model = _load_model(piece_model_path, 12, device)
+        piece_mask = [i for i, lbl in enumerate(all_labels_str) if lbl != "empty"]
+        if not piece_mask:
+            LOGGER.warning("No occupied squares found; skipping piece model fine-tuning")
+        else:
+            piece_tensors = all_tensors[piece_mask]
+            piece_indices = torch.tensor(
+                [_PIECE_LABELS_NO_EMPTY.index(all_labels_str[i]) for i in piece_mask],  # type: ignore[arg-type]
+                dtype=torch.long,
+            )
+            piece_out = output_dir / "piece.pt"
+            _finetune(
+                piece_model,
+                piece_tensors,
+                piece_indices,
+                device,
+                piece_out,
+                metric_key="piece_loss",
+                on_epoch=lambda step, m: mlops.log_epoch_metrics(m, step),
+            )
+            mlops.log_artifact(piece_out)
+
+    LOGGER.info("Transfer learning complete")
+    LOGGER.info(f"Custom checkpoints saved to {output_dir}")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -200,6 +275,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description="Adapt models to a specific piece set using 2 starting-position photos."
     )
+    add_logging_args(parser)
     parser.add_argument("--photo1", type=Path, required=True)
     parser.add_argument("--photo2", type=Path, required=True)
     parser.add_argument(
@@ -211,7 +287,22 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--output", type=Path, default=Path("models/custom"), dest="output"
     )
+    parser.add_argument(
+        "--occupancy-run-id",
+        type=str,
+        default=None,
+        dest="occupancy_run_id",
+        help="MLflow run ID of the base occupancy model (for lineage tracking).",
+    )
+    parser.add_argument(
+        "--piece-run-id",
+        type=str,
+        default=None,
+        dest="piece_run_id",
+        help="MLflow run ID of the base piece model (for lineage tracking).",
+    )
     args = parser.parse_args(argv)
+    configure_logging(args.log_level)
 
     transfer_learn(
         photo1=args.photo1,
@@ -219,6 +310,8 @@ def main(argv: list[str] | None = None) -> None:
         occupancy_model_path=args.occupancy_model,
         piece_model_path=args.piece_model,
         output_dir=args.output,
+        occupancy_run_id=args.occupancy_run_id,
+        piece_run_id=args.piece_run_id,
     )
 
 
