@@ -11,6 +11,7 @@ from PIL import Image as PILImage
 
 from chesscoach.vision import BoardNotFoundError, predict_fen
 from chesscoach.vision.piece_classifier import PieceClassifier
+from chesscoach.vision.piece_detector import PieceDetector
 from tests.vision.conftest import make_synthetic_board
 
 _FEN_RANK_RE = re.compile(r"^[1-8pPnNbBrRqQkK]+$")
@@ -79,6 +80,11 @@ def test_stub_produces_all_empty_fen(
 ) -> None:
     """With stub classifier every square is 'empty', so every rank is '8'."""
     fen = predict_fen(board_bytes, stub)
+    assert fen == "8/8/8/8/8/8/8/8"
+
+
+def test_detector_stub_produces_all_empty_fen(board_bytes: bytes) -> None:
+    fen = predict_fen(board_bytes, PieceDetector())
     assert fen == "8/8/8/8/8/8/8/8"
 
 

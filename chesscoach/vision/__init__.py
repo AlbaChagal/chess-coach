@@ -4,9 +4,16 @@ from pathlib import Path
 
 from chesscoach.vision.board_detector import BoardNotFoundError
 from chesscoach.vision.piece_classifier import PieceClassifier
+from chesscoach.vision.piece_detector import PieceDetector
 from chesscoach.vision.predictor import predict_fen
 
-__all__ = ["predict_fen", "PieceClassifier", "BoardNotFoundError", "BoardVision"]
+__all__ = [
+    "predict_fen",
+    "PieceClassifier",
+    "PieceDetector",
+    "BoardNotFoundError",
+    "BoardVision",
+]
 
 
 class BoardVision:
@@ -19,7 +26,10 @@ class BoardVision:
             the stub classifier (no checkpoint required).
     """
 
-    def __init__(self, classifier: PieceClassifier | None = None) -> None:
+    def __init__(
+        self,
+        classifier: PieceClassifier | PieceDetector | None = None,
+    ) -> None:
         self._classifier = classifier
 
     def fen_from_image(self, image_path: Path) -> str:

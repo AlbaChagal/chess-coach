@@ -186,6 +186,9 @@ class Explainer:
         """Return (score_cp, score_mate) after *move* is played, from the mover's POV."""
         board_after = board.copy()
         board_after.push(move)
+        # Terminal positions need special handling — the engine has no moves to analyse.
+        if board_after.is_checkmate():
+            return None, 1  # mover delivered mate in 1
         analyses = self._engine.get_best_moves(board_after, 1)
         if not analyses:
             return None, None

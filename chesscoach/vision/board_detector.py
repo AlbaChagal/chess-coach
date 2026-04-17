@@ -16,6 +16,7 @@ import numpy as np
 
 BOARD_SIZE = 1024
 _SQUARE_SIZE = BOARD_SIZE // 8
+DEFAULT_WARP_MARGIN_RATIO = 0.18
 
 # Number of grid lines in each direction (8 squares → 9 lines)
 _GRID_LINES = 9
@@ -45,10 +46,17 @@ def detect_board(image: np.ndarray) -> np.ndarray:
         BoardNotFoundError: If no chessboard grid can be reliably detected.
     """
     LOGGER.debug(f"Detecting board in image with shape={image.shape}")
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    corners = _find_board_corners(gray)
+    corners = detect_board_corners(image)
     LOGGER.debug(f"Detected board corners: {corners.tolist()}")
     return warp_board_from_corners(image, corners)
+
+
+def detect_board_corners(image: np.ndarray) -> np.ndarray:
+    """Detect a chessboard in *image* and return its ordered outer corners."""
+    LOGGER.debug(f"Detecting board corners in image with shape={image.shape}")
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    corners = _find_board_corners(gray)
+    return corners
 
 
 def split_into_squares(
@@ -401,17 +409,47 @@ def _ransac_grid_positions(
 # ---------------------------------------------------------------------------
 
 
-def warp_board_from_corners(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
+def warp_board_from_corners(
+    image: np.ndarray,
+    corners: np.ndarray,
+    *,
+    margin_ratio: float = DEFAULT_WARP_MARGIN_RATIO,
+) -> np.ndarray:
     """Perspective-warp *image* so that *corners* map to the canonical board."""
-    dst = np.array(
-        [
-            [0, 0],
-            [BOARD_SIZE - 1, 0],
-            [BOARD_SIZE - 1, BOARD_SIZE - 1],
-            [0, BOARD_SIZE - 1],
-        ],
-        dtype=np.float32,
-    )
+    dst = canonical_board_corners(BOARD_SIZE, margin_ratio=margin_ratio)
     matrix = cv2.getPerspectiveTransform(corners, dst)
     LOGGER.debug(f"Warping board with transform matrix={matrix.tolist()}")
     return cv2.warpPerspective(image, matrix, (BOARD_SIZE, BOARD_SIZE))
+
+
+def canonical_board_corners(
+    board_size: int,
+    *,
+    margin_ratio: float = DEFAULT_WARP_MARGIN_RATIO,
+) -> np.ndarray:
+    """Return destination corners for a board inset within a square canvas."""
+    if not 0.0 <= margin_ratio < 0.5:
+        raise ValueError(f"margin_ratio must be in [0.0, 0.5), got {margin_ratio}")
+    inset = margin_ratio * (board_size - 1)
+    max_coord = board_size - 1 - inset
+    return np.array(
+        [
+            [inset, inset],
+            [max_coord, inset],
+            [max_coord, max_coord],
+            [inset, max_coord],
+        ],
+        dtype=np.float32,
+    )
+
+
+def canonical_board_bounds(
+    board_size: int,
+    *,
+    margin_ratio: float = DEFAULT_WARP_MARGIN_RATIO,
+) -> tuple[float, float, float]:
+    """Return the inset board origin and side length for square assignment."""
+    corners = canonical_board_corners(board_size, margin_ratio=margin_ratio)
+    origin_x, origin_y = corners[0]
+    side_length = float(corners[1][0] - corners[0][0])
+    return float(origin_x), float(origin_y), side_length
