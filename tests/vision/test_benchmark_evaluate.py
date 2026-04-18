@@ -151,7 +151,7 @@ def test_main_filters_dataset_by_split(monkeypatch, tmp_path: Path) -> None:
 def test_main_passes_optional_board_localizer(monkeypatch, tmp_path: Path) -> None:
     dataset_path = tmp_path / "dataset.json"
     dataset_path.write_text("[]")
-    localizer_calls: list[Path] = []
+    localizer_calls: list[tuple[Path, int]] = []
     seen_localizers: list[object | None] = []
 
     monkeypatch.setattr(evaluate_module, "_load_dataset", lambda path: [])
@@ -174,7 +174,8 @@ def test_main_passes_optional_board_localizer(monkeypatch, tmp_path: Path) -> No
     monkeypatch.setattr(
         evaluate_module,
         "BoardCornerLocalizer",
-        lambda checkpoint: localizer_calls.append(checkpoint) or object(),
+        lambda checkpoint, image_size=512: localizer_calls.append((checkpoint, image_size))
+        or object(),
     )
     monkeypatch.setattr(evaluate_module, "configure_logging", lambda level: None)
 
@@ -184,8 +185,10 @@ def test_main_passes_optional_board_localizer(monkeypatch, tmp_path: Path) -> No
             str(dataset_path),
             "--board-localizer-checkpoint",
             "models/board_localizer.pt",
+            "--board-localizer-image-size",
+            "640",
         ]
     )
 
-    assert localizer_calls == [Path("models/board_localizer.pt")]
+    assert localizer_calls == [(Path("models/board_localizer.pt"), 640)]
     assert len(seen_localizers) == 1

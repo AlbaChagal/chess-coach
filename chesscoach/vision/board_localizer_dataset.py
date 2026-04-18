@@ -20,6 +20,8 @@ _MAX_BRIGHTNESS_SHIFT = 16.0
 _MIN_CONTRAST_SCALE = 0.9
 _MAX_CONTRAST_SCALE = 1.1
 _BLUR_PROBABILITY = 0.15
+_PERSPECTIVE_JITTER_PROBABILITY = 0.7
+_MAX_CORNER_JITTER_RATIO = 0.06
 
 
 def _apply_color_jitter(image: np.ndarray) -> np.ndarray:
@@ -41,6 +43,54 @@ def _augment_localizer_sample(image: np.ndarray) -> np.ndarray:
     if random.random() < _BLUR_PROBABILITY:
         augmented = _apply_blur(augmented)
     return augmented
+
+
+def _apply_perspective_jitter(
+    image: np.ndarray,
+    corners: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply a mild perspective warp and remap the corner targets."""
+    if random.random() >= _PERSPECTIVE_JITTER_PROBABILITY:
+        return image, corners
+
+    height, width = image.shape[:2]
+    source = np.array(
+        [
+            [0.0, 0.0],
+            [width - 1.0, 0.0],
+            [width - 1.0, height - 1.0],
+            [0.0, height - 1.0],
+        ],
+        dtype=np.float32,
+    )
+    max_dx = width * _MAX_CORNER_JITTER_RATIO
+    max_dy = height * _MAX_CORNER_JITTER_RATIO
+    destination = source + np.array(
+        [
+            [random.uniform(-max_dx, max_dx), random.uniform(-max_dy, max_dy)],
+            [random.uniform(-max_dx, max_dx), random.uniform(-max_dy, max_dy)],
+            [random.uniform(-max_dx, max_dx), random.uniform(-max_dy, max_dy)],
+            [random.uniform(-max_dx, max_dx), random.uniform(-max_dy, max_dy)],
+        ],
+        dtype=np.float32,
+    )
+    destination[:, 0] = np.clip(destination[:, 0], 0.0, width - 1.0)
+    destination[:, 1] = np.clip(destination[:, 1], 0.0, height - 1.0)
+
+    matrix = cv2.getPerspectiveTransform(source, destination)
+    warped = cv2.warpPerspective(
+        image,
+        matrix,
+        (width, height),
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+    remapped_corners = cv2.perspectiveTransform(
+        corners.reshape(1, -1, 2),
+        matrix,
+    ).reshape(-1, 2)
+    remapped_corners[:, 0] = np.clip(remapped_corners[:, 0], 0.0, width - 1.0)
+    remapped_corners[:, 1] = np.clip(remapped_corners[:, 1], 0.0, height - 1.0)
+    return warped, remapped_corners.astype(np.float32)
 
 
 def _build_transform(image_size: int) -> transforms.Compose:
@@ -89,11 +139,12 @@ class BoardLocalizationDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         image = cv2.imread(str(image_path))
         if image is None:
             raise FileNotFoundError(f"Could not read board-localizer image: {image_path}")
+        corners = np.array(record["board_corners"], dtype=np.float32)
         if self._augment:
+            image, corners = _apply_perspective_jitter(image, corners)
             image = _augment_localizer_sample(image)
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         tensor: torch.Tensor = self._transform(rgb)  # type: ignore[assignment]
-        corners = np.array(record["board_corners"], dtype=np.float32)
         normalized = normalize_corners(corners, image.shape[1], image.shape[0]).reshape(-1)
         target = torch.tensor(normalized, dtype=torch.float32)
         return tensor, target

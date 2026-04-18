@@ -29,7 +29,10 @@ from pathlib import Path
 from chesscoach import mlops
 from chesscoach.logging_utils import add_logging_args, configure_logging
 from chesscoach.vision.board_detector import BoardNotFoundError
-from chesscoach.vision.board_localizer import BoardCornerLocalizer
+from chesscoach.vision.board_localizer import (
+    BoardCornerLocalizer,
+    DEFAULT_BOARD_LOCALIZER_IMAGE_SIZE,
+)
 from chesscoach.vision.piece_classifier import PieceClassifier
 from chesscoach.vision.piece_detector import PieceDetector
 from chesscoach.vision.predictor import predict_fen
@@ -162,6 +165,13 @@ def main(argv: list[str] | None = None) -> None:
         help="Optional learned board localizer checkpoint (.pt).",
     )
     parser.add_argument(
+        "--board-localizer-image-size",
+        type=int,
+        default=DEFAULT_BOARD_LOCALIZER_IMAGE_SIZE,
+        dest="board_localizer_image_size",
+        help="Inference resize for the learned board localizer.",
+    )
+    parser.add_argument(
         "--detector-checkpoint",
         type=Path,
         default=None,
@@ -228,7 +238,10 @@ def main(argv: list[str] | None = None) -> None:
         model_name = "stub"
 
     board_localizer = (
-        BoardCornerLocalizer(args.board_localizer_checkpoint)
+        BoardCornerLocalizer(
+            args.board_localizer_checkpoint,
+            image_size=args.board_localizer_image_size,
+        )
         if args.board_localizer_checkpoint is not None
         else None
     )
@@ -250,6 +263,7 @@ def main(argv: list[str] | None = None) -> None:
             "n_samples": len(samples),
             "detector_checkpoint": str(args.detector_checkpoint),
             "board_localizer_checkpoint": str(args.board_localizer_checkpoint),
+            "board_localizer_image_size": args.board_localizer_image_size,
             "occupancy_checkpoint": str(args.occupancy_checkpoint),
             "piece_checkpoint": str(args.piece_checkpoint),
             "model_tag": model_name,

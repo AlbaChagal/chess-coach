@@ -119,7 +119,7 @@ def train_board_localizer(
         "learning_rate": learning_rate,
         "image_size": image_size,
         "patience": patience,
-        "augmentation": "color_jitter,blur",
+        "augmentation": "perspective_jitter,color_jitter,blur",
         "architecture": BOARD_LOCALIZER_ARCHITECTURE,
     }
     with training_run(EXPERIMENTS["piece"], "board-localizer-train", params):

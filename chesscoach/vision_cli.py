@@ -8,7 +8,10 @@ from pathlib import Path
 
 from chesscoach.logging_utils import add_logging_args, configure_logging
 from chesscoach.vision import BoardNotFoundError, predict_fen
-from chesscoach.vision.board_localizer import BoardCornerLocalizer
+from chesscoach.vision.board_localizer import (
+    BoardCornerLocalizer,
+    DEFAULT_BOARD_LOCALIZER_IMAGE_SIZE,
+)
 from chesscoach.vision.piece_detector import (
     DEFAULT_DETECTOR_IMAGE_SIZE,
     PieceDetector,
@@ -23,6 +26,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("image", type=Path)
     parser.add_argument("--detector-checkpoint", type=Path, default=None)
     parser.add_argument("--board-localizer-checkpoint", type=Path, default=None)
+    parser.add_argument(
+        "--board-localizer-image-size",
+        type=int,
+        default=DEFAULT_BOARD_LOCALIZER_IMAGE_SIZE,
+        dest="board_localizer_image_size",
+    )
     parser.add_argument(
         "--score-threshold",
         type=float,
@@ -49,7 +58,10 @@ def main(argv: list[str] | None = None) -> None:
         else PieceDetector()
     )
     board_localizer = (
-        BoardCornerLocalizer(args.board_localizer_checkpoint)
+        BoardCornerLocalizer(
+            args.board_localizer_checkpoint,
+            image_size=args.board_localizer_image_size,
+        )
         if args.board_localizer_checkpoint is not None
         else None
     )
