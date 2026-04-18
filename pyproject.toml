@@ -24,6 +24,7 @@ dependencies = [
 
 [project.scripts]
 chess-coach = "chesscoach.cli:main"
+chess-fen = "chesscoach.vision_cli:main"
 
 [project.optional-dependencies]
 dev = [

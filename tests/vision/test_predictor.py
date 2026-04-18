@@ -88,6 +88,39 @@ def test_detector_stub_produces_all_empty_fen(board_bytes: bytes) -> None:
     assert fen == "8/8/8/8/8/8/8/8"
 
 
+def test_predict_fen_uses_default_board_localizer_when_available(
+    monkeypatch,
+    board_bytes: bytes,
+) -> None:
+    class _Detector:
+        def detect(self, image: np.ndarray) -> list[object]:
+            _ = image
+            return []
+
+    localizer_calls: list[np.ndarray] = []
+
+    class _Localizer:
+        def detect_corners(self, image: np.ndarray) -> np.ndarray:
+            localizer_calls.append(image)
+            return np.array(
+                [[0.0, 0.0], [255.0, 0.0], [255.0, 255.0], [0.0, 255.0]],
+                dtype=np.float32,
+            )
+
+    from chesscoach.vision import predictor as predictor_module
+
+    monkeypatch.setattr(
+        predictor_module,
+        "_get_default_board_localizer",
+        lambda: _Localizer(),
+    )
+
+    fen = predictor_module.predict_fen(board_bytes, _Detector())
+
+    assert fen == "8/8/8/8/8/8/8/8"
+    assert len(localizer_calls) == 1
+
+
 def test_output_has_seven_slashes(board_bytes: bytes, stub: PieceClassifier) -> None:
     fen = predict_fen(board_bytes, stub)
     assert fen.count("/") == 7

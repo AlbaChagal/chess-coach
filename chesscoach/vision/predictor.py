@@ -17,6 +17,7 @@ from chesscoach.vision.board_detector import (
     detect_board,
     split_into_squares,
 )
+from chesscoach.vision.board_localizer import BoardCornerLocalizer
 from chesscoach.vision.board_postprocess import rerank_board_candidates
 from chesscoach.vision.fen_builder import build_fen
 from chesscoach.vision.piece_assignment import collect_square_candidates_via_homography
@@ -24,6 +25,9 @@ from chesscoach.vision.piece_detector import PieceDetector
 from chesscoach.vision.types import PieceLabel, SquareGrid
 
 _default_detector: PieceDetector | None = None
+_default_board_localizer: BoardCornerLocalizer | None = None
+_default_board_localizer_initialized = False
+_DEFAULT_BOARD_LOCALIZER_CHECKPOINT = Path("models/board_localizer.pt")
 LOGGER = logging.getLogger(__name__)
 
 
@@ -41,6 +45,31 @@ def _get_default_detector() -> PieceDetector:
         LOGGER.info("Initializing default piece detector")
         _default_detector = PieceDetector()
     return _default_detector
+
+
+def _get_default_board_localizer() -> BoardCornerLocalizer | None:
+    global _default_board_localizer
+    global _default_board_localizer_initialized
+    if _default_board_localizer_initialized:
+        return _default_board_localizer
+
+    _default_board_localizer_initialized = True
+    if not _DEFAULT_BOARD_LOCALIZER_CHECKPOINT.exists():
+        LOGGER.info(
+            f"No default board localizer checkpoint found at "
+            f"{_DEFAULT_BOARD_LOCALIZER_CHECKPOINT}; falling back to classical "
+            f"board detection."
+        )
+        return None
+
+    LOGGER.info(
+        f"Initializing default board localizer from "
+        f"{_DEFAULT_BOARD_LOCALIZER_CHECKPOINT}"
+    )
+    _default_board_localizer = BoardCornerLocalizer(
+        _DEFAULT_BOARD_LOCALIZER_CHECKPOINT
+    )
+    return _default_board_localizer
 
 
 def _to_bgr(image: bytes | Path | PILImage.Image) -> np.ndarray:
@@ -69,6 +98,7 @@ def _to_bgr(image: bytes | Path | PILImage.Image) -> np.ndarray:
 def predict_fen(
     image: bytes | Path | PILImage.Image,
     classifier: PieceDetector | _LegacyClassifier | None = None,
+    board_localizer: BoardCornerLocalizer | None = None,
 ) -> str:
     """Detect the chess position in *image* and return a FEN piece-placement string.
 
@@ -98,7 +128,13 @@ def predict_fen(
     LOGGER.info("Starting FEN prediction")
     bgr = _to_bgr(image)
     if hasattr(classifier, "detect"):
-        board_corners = detect_board_corners(bgr)
+        if board_localizer is None:
+            board_localizer = _get_default_board_localizer()
+        board_corners = (
+            board_localizer.detect_corners(bgr)
+            if board_localizer is not None
+            else detect_board_corners(bgr)
+        )
         detections = classifier.detect(bgr)
         square_candidates, _ = collect_square_candidates_via_homography(
             detections,

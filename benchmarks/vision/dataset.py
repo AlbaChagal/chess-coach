@@ -17,6 +17,7 @@ class BoardSample:
 
     image_path: Path
     fen_placement: str
+    split: str | None = None
 
 
 def load_csv(path: Path) -> list[BoardSample]:
@@ -49,6 +50,7 @@ def load_csv(path: Path) -> list[BoardSample]:
                 BoardSample(
                     image_path=Path(row["image_path"]),
                     fen_placement=fen_placement,
+                    split=row.get("split") or None,
                 )
             )
     LOGGER.info(f"Loaded {len(samples)} samples from CSV dataset {path}")
@@ -70,6 +72,7 @@ def load_json(path: Path) -> list[BoardSample]:
         BoardSample(
             image_path=Path(item["image_path"]),
             fen_placement=item["fen"].split()[0],
+            split=item.get("split"),
         )
         for item in data
     ]
