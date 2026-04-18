@@ -11,3 +11,4 @@
 /scripts/download_dataset.py
 /mlruns/
 /mlflow.db
+/debug/
