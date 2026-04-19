@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 from pathlib import Path
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from chesscoach.logging_utils import add_logging_args, configure_logging
 from chesscoach.mlops import EXPERIMENTS, log_artifact, log_epoch_metrics, training_run
@@ -24,36 +25,98 @@ _TRAIN_LOG_EVERY = 10
 _DEFAULT_PATIENCE = 5
 
 
+def _pixel_corner_error(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    sizes: torch.Tensor,
+) -> torch.Tensor:
+    """Return mean per-sample corner error in original-image pixels."""
+    pred_corners = predictions.view(-1, 4, 2)
+    target_corners = targets.view(-1, 4, 2)
+    scales = sizes.unsqueeze(1)
+    deltas = (pred_corners - target_corners) * scales
+    return deltas.pow(2).sum(dim=2).sqrt().mean(dim=1)
+
+
 def _evaluate_model(
     model: torch.nn.Module,
-    dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
+    dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor]],
     device: torch.device,
     criterion: torch.nn.Module,
-) -> tuple[float, float]:
+) -> tuple[float, float, float]:
     model.eval()
     total_loss = 0.0
-    total_mean_corner_error = 0.0
+    total_mean_corner_error_norm = 0.0
+    total_mean_corner_error_px = 0.0
+    total_leq_20px = 0
     total_samples = 0
     with torch.no_grad():
-        for images, targets in dataloader:
+        for images, targets, sizes in dataloader:
             images = images.to(device)
             targets = targets.to(device)
+            sizes = sizes.to(device)
             predictions = model(images)
             loss = criterion(predictions, targets)
-            sample_errors = (
-                (predictions.view(-1, 4, 2) - targets.view(-1, 4, 2))
-                .pow(2)
-                .sum(dim=2)
-                .sqrt()
-                .mean(dim=1)
+            sample_errors_norm = _pixel_corner_error(
+                predictions,
+                targets,
+                torch.ones_like(sizes),
             )
+            sample_errors_px = _pixel_corner_error(predictions, targets, sizes)
             batch_size = images.shape[0]
             total_loss += float(loss.item()) * batch_size
-            total_mean_corner_error += float(sample_errors.sum().item())
+            total_mean_corner_error_norm += float(sample_errors_norm.sum().item())
+            total_mean_corner_error_px += float(sample_errors_px.sum().item())
+            total_leq_20px += int((sample_errors_px <= 20.0).sum().item())
             total_samples += batch_size
     if total_samples == 0:
-        return 0.0, 0.0
-    return total_loss / total_samples, total_mean_corner_error / total_samples
+        return 0.0, 0.0, 0.0
+    return (
+        total_loss / total_samples,
+        total_mean_corner_error_px / total_samples,
+        total_leq_20px / total_samples,
+    )
+
+
+def _load_sample_weights(
+    dataset: BoardLocalizationDataset,
+    weights_path: Path | None,
+) -> list[float] | None:
+    """Load per-sample weights keyed by dataset image path."""
+    if weights_path is None:
+        return None
+
+    payload = json.loads(weights_path.read_text())
+    if not isinstance(payload, dict):
+        raise ValueError(f"Invalid hard-example weights file: {weights_path}")
+
+    default_weight = payload.get("default_weight", 1.0)
+    if not isinstance(default_weight, int | float):
+        raise ValueError(
+            f"Invalid default_weight in hard-example weights file: {weights_path}"
+        )
+
+    samples = payload.get("samples", payload)
+    if not isinstance(samples, dict):
+        raise ValueError(f"Invalid samples mapping in hard-example weights file: {weights_path}")
+
+    weights: list[float] = []
+    matched = 0
+    for sample_id in dataset.sample_ids():
+        raw_weight = samples.get(sample_id, default_weight)
+        if sample_id in samples:
+            matched += 1
+        if not isinstance(raw_weight, int | float):
+            raise ValueError(
+                f"Invalid sample weight for {sample_id} in hard-example weights file"
+            )
+        weights.append(max(float(raw_weight), 1e-3))
+
+    LOGGER.info(
+        f"Loaded hard-example weights from {weights_path} "
+        f"matched_samples={matched}/{len(weights)}"
+    )
+    return weights
 
 
 def train_board_localizer(
@@ -65,6 +128,7 @@ def train_board_localizer(
     learning_rate: float,
     image_size: int,
     patience: int,
+    hard_example_weights: Path | None,
 ) -> None:
     """Train a board-corner localizer on the prepared raw-image manifest."""
     device = select_board_localizer_device()
@@ -79,13 +143,24 @@ def train_board_localizer(
         split="val",
         image_size=image_size,
     )
-    train_dl = DataLoader(
+    sample_weights = _load_sample_weights(train_ds, hard_example_weights)
+    train_sampler = (
+        WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(sample_weights),
+            replacement=True,
+        )
+        if sample_weights is not None
+        else None
+    )
+    train_dl: DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = DataLoader(
         train_ds,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
         num_workers=2,
     )
-    val_dl = DataLoader(
+    val_dl: DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = DataLoader(
         val_ds,
         batch_size=batch_size,
         shuffle=False,
@@ -109,7 +184,7 @@ def train_board_localizer(
         patience=2,
     )
     criterion = torch.nn.SmoothL1Loss()
-    best_val_loss = float("inf")
+    best_val_mean_corner_error_px = float("inf")
     epochs_without_improvement = 0
 
     params = {
@@ -121,12 +196,16 @@ def train_board_localizer(
         "patience": patience,
         "augmentation": "perspective_jitter,color_jitter,blur",
         "architecture": BOARD_LOCALIZER_ARCHITECTURE,
+        "selection_metric": "val_mean_corner_error_px",
+        "hard_example_weights": str(hard_example_weights)
+        if hard_example_weights is not None
+        else "",
     }
     with training_run(EXPERIMENTS["piece"], "board-localizer-train", params):
         for epoch in range(1, epochs + 1):
             model.train()
             epoch_loss = 0.0
-            for step, (images, targets) in enumerate(train_dl, start=1):
+            for step, (images, targets, _sizes) in enumerate(train_dl, start=1):
                 images = images.to(device)
                 targets = targets.to(device)
                 optimizer.zero_grad()
@@ -142,7 +221,7 @@ def train_board_localizer(
                     )
 
             train_loss = epoch_loss / len(train_ds) if len(train_ds) else 0.0
-            val_loss, val_mean_corner_error = _evaluate_model(
+            val_loss, val_mean_corner_error_px, val_boards_leq_20px = _evaluate_model(
                 model,
                 val_dl,
                 device,
@@ -153,19 +232,21 @@ def train_board_localizer(
             metrics = {
                 "train_loss": round(train_loss, 5),
                 "val_loss": round(val_loss, 5),
-                "val_mean_corner_error_norm": round(val_mean_corner_error, 5),
+                "val_mean_corner_error_px": round(val_mean_corner_error_px, 5),
+                "val_boards_leq_20px": round(val_boards_leq_20px, 5),
                 "lr": round(current_lr, 8),
             }
             log_epoch_metrics(metrics, epoch)
             LOGGER.info(
                 f"Board localizer epoch {epoch}/{epochs} "
                 f"train_loss={train_loss:.4f} val_loss={val_loss:.4f} "
-                f"val_mean_corner_error_norm={val_mean_corner_error:.4f} "
+                f"val_mean_corner_error_px={val_mean_corner_error_px:.2f} "
+                f"val_boards_leq_20px={val_boards_leq_20px:.4f} "
                 f"lr={current_lr:.6f}"
             )
 
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+            if val_mean_corner_error_px < best_val_mean_corner_error_px:
+                best_val_mean_corner_error_px = val_mean_corner_error_px
                 epochs_without_improvement = 0
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 torch.save(model.state_dict(), str(output_path))
@@ -176,7 +257,7 @@ def train_board_localizer(
             if epochs_without_improvement >= patience:
                 LOGGER.info(
                     f"Board localizer early stopping after {epoch} epochs "
-                    f"best_val_loss={best_val_loss:.4f}"
+                    f"best_val_mean_corner_error_px={best_val_mean_corner_error_px:.2f}"
                 )
                 break
 
@@ -199,6 +280,13 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--patience", type=int, default=_DEFAULT_PATIENCE)
     parser.add_argument(
+        "--hard-example-weights",
+        type=Path,
+        default=None,
+        dest="hard_example_weights",
+        help="Optional JSON file mapping image_path to sample weight.",
+    )
+    parser.add_argument(
         "--image-size",
         type=int,
         default=DEFAULT_BOARD_LOCALIZER_IMAGE_SIZE,
@@ -214,6 +302,7 @@ def main(argv: list[str] | None = None) -> None:
         learning_rate=args.lr,
         image_size=args.image_size,
         patience=args.patience,
+        hard_example_weights=args.hard_example_weights,
     )
 
 

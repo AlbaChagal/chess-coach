@@ -107,7 +107,7 @@ def _build_transform(image_size: int) -> transforms.Compose:
     )
 
 
-class BoardLocalizationDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
+class BoardLocalizationDataset(Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]):
     """Load raw images and normalized board corners from a JSONL manifest."""
 
     def __init__(
@@ -133,7 +133,11 @@ class BoardLocalizationDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
     def __len__(self) -> int:
         return len(self._records)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def sample_ids(self) -> list[str]:
+        """Return stable sample ids for weighting and diagnostics."""
+        return [str(record["image_path"]) for record in self._records]
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         record = self._records[idx]
         image_path = self._root / record["image_path"]
         image = cv2.imread(str(image_path))
@@ -147,4 +151,8 @@ class BoardLocalizationDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         tensor: torch.Tensor = self._transform(rgb)  # type: ignore[assignment]
         normalized = normalize_corners(corners, image.shape[1], image.shape[0]).reshape(-1)
         target = torch.tensor(normalized, dtype=torch.float32)
-        return tensor, target
+        size = torch.tensor(
+            [float(image.shape[1]), float(image.shape[0])],
+            dtype=torch.float32,
+        )
+        return tensor, target, size
