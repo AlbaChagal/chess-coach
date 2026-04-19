@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from chesscoach.analysis.models import MoveAnalysis
-from chesscoach.explanation.models import ExplainedMove, MoveQuality, TacticInfo
+from chesscoach.explanation.models import (
+    ExplainedMove,
+    MoveQuality,
+    StructuredExplanation,
+    TacticInfo,
+)
 from chesscoach.explanation.prompt import build_prompt
 
 _BEST = MoveAnalysis("Nf3", "g1f3", 35, None, 20, ["d5", "d4", "Nf6"])
@@ -30,54 +35,69 @@ def _make_explained(
     )
 
 
+def _make_structured() -> StructuredExplanation:
+    return StructuredExplanation(
+        summary="Nf3 develops a piece and keeps the strongest setup.",
+        what_the_move_does="It develops the knight and supports central control.",
+        what_it_threatens="It increases central pressure and prepares quick castling.",
+        why_it_is_best="It keeps the best engine evaluation on the board.",
+        why_alternatives_are_worse="The alternatives are playable but slightly less precise.",
+        alternatives=[],
+        tactical_themes=["fork"],
+    )
+
+
 def test_build_prompt_returns_tuple_of_strings() -> None:
-    system, user = build_prompt(_make_explained())
+    system, user = build_prompt(_make_explained(), _make_structured())
     assert isinstance(system, str)
     assert isinstance(user, str)
 
 
 def test_system_prompt_non_empty() -> None:
-    system, _ = build_prompt(_make_explained())
+    system, _ = build_prompt(_make_explained(), _make_structured())
     assert len(system) > 0
 
 
 def test_user_prompt_contains_fen() -> None:
-    _, user = build_prompt(_make_explained())
+    _, user = build_prompt(_make_explained(), _make_structured())
     assert "rnbqkbnr" in user
 
 
 def test_user_prompt_contains_move_san() -> None:
-    _, user = build_prompt(_make_explained())
-    assert "e5" in user
+    _, user = build_prompt(_make_explained(), _make_structured())
+    assert "Nf3" in user
 
 
-def test_user_prompt_contains_quality_label() -> None:
-    _, user = build_prompt(_make_explained())
-    assert "blunder" in user.lower()
+def test_user_prompt_contains_structured_summary() -> None:
+    _, user = build_prompt(_make_explained(), _make_structured())
+    assert "keeps the strongest setup" in user
 
 
 def test_user_prompt_contains_best_move_san() -> None:
-    _, user = build_prompt(_make_explained())
+    _, user = build_prompt(_make_explained(), _make_structured())
     assert "Nf3" in user
 
 
 def test_tactics_section_present_when_tactics_detected() -> None:
     tactic = TacticInfo(name="hanging_piece", description="Rook on e4 is hanging.")
-    _, user = build_prompt(_make_explained(tactics_played=[tactic]))
+    _, user = build_prompt(
+        _make_explained(tactics_played=[tactic]),
+        _make_structured(),
+    )
     assert "Rook on e4 is hanging" in user
 
 
 def test_tactics_section_none_when_empty() -> None:
-    _, user = build_prompt(_make_explained(tactics_played=[]))
+    _, user = build_prompt(_make_explained(tactics_played=[]), _make_structured())
     assert "None detected" in user
 
 
 def test_best_move_line_in_prompt() -> None:
-    _, user = build_prompt(_make_explained())
+    _, user = build_prompt(_make_explained(), _make_structured())
     # Continuation moves should appear.
     assert "d5" in user
 
 
-def test_best_quality_label_in_prompt() -> None:
-    _, user = build_prompt(_make_explained(quality=_QUALITY_BEST))
-    assert "best" in user.lower()
+def test_prompt_contains_why_alternatives_are_worse() -> None:
+    _, user = build_prompt(_make_explained(quality=_QUALITY_BEST), _make_structured())
+    assert "alternatives are worse" in user.lower()

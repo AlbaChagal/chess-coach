@@ -41,5 +41,28 @@ class ExplainedMove:
     tactics_after_best: list[TacticInfo]    # what you gain if you play the best move
 
 
+@dataclass(frozen=True)
+class AlternativeExplanation:
+    """Summary of why an alternative move is inferior to the best move."""
+
+    move_san: str
+    move_uci: str
+    score_display: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class StructuredExplanation:
+    """Typed explanation payload for product and client rendering."""
+
+    summary: str
+    what_the_move_does: str
+    what_it_threatens: str
+    why_it_is_best: str
+    why_alternatives_are_worse: str
+    alternatives: list[AlternativeExplanation]
+    tactical_themes: list[str]
+
+
 class ExplanationError(Exception):
     """Raised when the LLM provider call fails."""

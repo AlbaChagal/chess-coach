@@ -14,6 +14,7 @@ from chesscoach.pipeline_models import (
     PipelineWarning,
     VisionResult,
 )
+from chesscoach.explanation.models import StructuredExplanation
 
 STARTING_PLACEMENT = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
 
@@ -45,12 +46,20 @@ def make_pipeline_result(**overrides) -> CoachingResult:
             analysis_status="success",
         ),
         explanation=ExplanationResult(
-            move_uci=None,
-            move_san=None,
+            move_uci="e2e4",
+            move_san="e4",
             explanation_text=None,
-            structured_explanation=None,
+            structured_explanation=StructuredExplanation(
+                summary="e4 takes the center.",
+                what_the_move_does="It claims central space.",
+                what_it_threatens="It opens lines for development.",
+                why_it_is_best="It keeps the strongest evaluation.",
+                why_alternatives_are_worse="The alternatives are slightly slower.",
+                alternatives=[],
+                tactical_themes=["fork"],
+            ),
             provider=None,
-            status="skipped",
+            status="success",
         ),
         status="success",
         user_action_required=None,
@@ -126,7 +135,9 @@ def test_image_subcommand_uses_default_white_and_prints_warning(
 
     captured = capsys.readouterr()
     assert captured_request["request"].side_to_move == "w"
+    assert captured_request["request"].explanation_provider is None
     assert "Warning [explanation_skipped_unavailable]" in captured.out
+    assert "Summary: e4 takes the center." in captured.out
 
 
 def test_image_subcommand_json_outputs_machine_readable_payload(
@@ -155,6 +166,44 @@ def test_image_subcommand_json_outputs_machine_readable_payload(
     payload = json.loads(captured.out)
     assert payload["status"] == "success"
     assert payload["position"]["side_to_move"] == "w"
+    assert payload["explanation"]["structured_explanation"]["summary"] == (
+        "e4 takes the center."
+    )
+
+
+def test_image_subcommand_passes_explanation_provider_and_model(
+    capsys, monkeypatch
+) -> None:
+    captured_request = {}
+
+    def _run_pipeline(request):
+        captured_request["request"] = request
+        return make_pipeline_result()
+
+    monkeypatch.setattr("chesscoach.cli.run_coaching_pipeline", _run_pipeline)
+
+    from chesscoach.cli import main
+
+    main(
+        [
+            "image",
+            "board.jpg",
+            "--white-king-start-click-x",
+            "12",
+            "--white-king-start-click-y",
+            "34",
+            "--include-explanation",
+            "--explanation-provider",
+            "openai",
+            "--explanation-model",
+            "gpt-4o-mini",
+        ]
+    )
+
+    _ = capsys.readouterr()
+    assert captured_request["request"].include_explanation is True
+    assert captured_request["request"].explanation_provider == "openai"
+    assert captured_request["request"].explanation_model == "gpt-4o-mini"
 
 
 def test_image_subcommand_failure_exits(capsys, monkeypatch) -> None:

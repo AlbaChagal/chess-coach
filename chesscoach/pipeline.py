@@ -20,7 +20,7 @@ from chesscoach.explanation import (
     LLMProvider,
     OpenAIProvider,
 )
-from chesscoach.explanation.models import ExplanationError
+from chesscoach.explanation.models import ExplanationError, StructuredExplanation
 from chesscoach.pipeline_models import (
     AnalysisResult,
     CoachingRequest,
@@ -39,6 +39,13 @@ LOW_CONFIDENCE_WARNING = PipelineWarning(
 EXPLANATION_UNAVAILABLE_WARNING = PipelineWarning(
     code="explanation_skipped_unavailable",
     message="Explanation was skipped because no LLM provider is configured.",
+)
+EXPLANATION_AMBIGUOUS_PROVIDER_WARNING = PipelineWarning(
+    code="explanation_skipped_ambiguous_provider",
+    message=(
+        "Explanation was skipped because multiple providers are configured and "
+        "no explicit provider was selected."
+    ),
 )
 EXPLANATION_FAILED_WARNING_CODE = "explanation_failed"
 VISION_CONFIDENCE_SUCCESS = 1.0
@@ -183,33 +190,39 @@ def run_explanation(
             ],
         )
 
-    provider_name, provider = _pick_explanation_provider()
-    best_move = analysis.top_moves[0]
-    if provider is None:
+    engine = ChessEngine()
+    provider_name: str | None = None
+    explained = None
+    structured: StructuredExplanation | None = None
+    try:
+        provider_name, provider, provider_warning = _pick_explanation_provider(
+            request.explanation_provider,
+            request.explanation_model,
+        )
+        explainer = Explainer(engine, provider, top_n=request.top_n)
+        explained = explainer.analyze_position(position.fen)
+        structured = explainer.build_structured_explanation(explained)
+        if provider is None:
+            return (
+                ExplanationResult(
+                    move_uci=explained.best_move.move_uci,
+                    move_san=explained.best_move.move_san,
+                    explanation_text=None,
+                    structured_explanation=structured,
+                    provider=provider_name,
+                    status="success",
+                ),
+                [provider_warning] if provider_warning is not None else [],
+            )
+        explanation_text = explainer.narrate_explanation(explained, structured)
+    except ValueError as exc:
         return (
             ExplanationResult(
-                move_uci=best_move.move_uci,
-                move_san=best_move.move_san,
+                move_uci=analysis.top_moves[0].move_uci,
+                move_san=analysis.top_moves[0].move_san,
                 explanation_text=None,
                 structured_explanation=None,
                 provider=None,
-                status="skipped",
-            ),
-            [EXPLANATION_UNAVAILABLE_WARNING],
-        )
-
-    engine = ChessEngine()
-    try:
-        explainer = Explainer(engine, provider, top_n=request.top_n)
-        explanation_text = explainer.explain_move(position.fen, best_move.move_uci)
-    except (ExplanationError, ValueError) as exc:
-        return (
-            ExplanationResult(
-                move_uci=best_move.move_uci,
-                move_san=best_move.move_san,
-                explanation_text=None,
-                structured_explanation=None,
-                provider=provider_name,
                 status="failed",
             ),
             [
@@ -219,15 +232,49 @@ def run_explanation(
                 )
             ],
         )
+    except ExplanationError as exc:
+        if explained is None or structured is None:
+            return (
+                ExplanationResult(
+                    move_uci=analysis.top_moves[0].move_uci,
+                    move_san=analysis.top_moves[0].move_san,
+                    explanation_text=None,
+                    structured_explanation=None,
+                    provider=provider_name,
+                    status="failed",
+                ),
+                [
+                    PipelineWarning(
+                        code=EXPLANATION_FAILED_WARNING_CODE,
+                        message=f"Explanation failed: {exc}",
+                    )
+                ],
+            )
+        return (
+            ExplanationResult(
+                move_uci=explained.best_move.move_uci,
+                move_san=explained.best_move.move_san,
+                explanation_text=None,
+                structured_explanation=structured,
+                provider=provider_name,
+                status="success",
+            ),
+            [
+                PipelineWarning(
+                    code="explanation_text_generation_failed",
+                    message=f"Explanation text generation failed: {exc}",
+                )
+            ],
+        )
     finally:
         engine.close()
 
     return (
         ExplanationResult(
-            move_uci=best_move.move_uci,
-            move_san=best_move.move_san,
+            move_uci=explained.best_move.move_uci,
+            move_san=explained.best_move.move_san,
             explanation_text=explanation_text,
-            structured_explanation=None,
+            structured_explanation=structured,
             provider=provider_name,
             status="success",
         ),
@@ -361,15 +408,45 @@ def _validate_completed_fen(fen: str) -> None:
         raise ValueError(f"Invalid board position in FEN: {fen!r}")
 
 
-def _pick_explanation_provider() -> tuple[str | None, LLMProvider | None]:
+def _pick_explanation_provider(
+    requested_provider: str | None,
+    requested_model: str | None,
+) -> tuple[str | None, LLMProvider | None, PipelineWarning | None]:
+    if requested_provider == "anthropic":
+        if not os.getenv("ANTHROPIC_API_KEY"):
+            return "anthropic", None, EXPLANATION_UNAVAILABLE_WARNING
+        return (
+            "anthropic",
+            ClaudeProvider(model=requested_model or "claude-haiku-4-5-20251001"),
+            None,
+        )
+    if requested_provider == "openai":
+        if not os.getenv("OPENAI_API_KEY"):
+            return "openai", None, EXPLANATION_UNAVAILABLE_WARNING
+        return (
+            "openai",
+            OpenAIProvider(model=requested_model or "gpt-4o-mini"),
+            None,
+        )
+
     configured: list[tuple[str, LLMProvider]] = []
     if os.getenv("ANTHROPIC_API_KEY"):
-        configured.append(("anthropic", ClaudeProvider()))
+        configured.append(
+            (
+                "anthropic",
+                ClaudeProvider(model=requested_model or "claude-haiku-4-5-20251001"),
+            )
+        )
     if os.getenv("OPENAI_API_KEY"):
-        configured.append(("openai", OpenAIProvider()))
+        configured.append(
+            ("openai", OpenAIProvider(model=requested_model or "gpt-4o-mini"))
+        )
+    if not configured:
+        return None, None, EXPLANATION_UNAVAILABLE_WARNING
     if len(configured) != 1:
-        return None, None
-    return configured[0]
+        return None, None, EXPLANATION_AMBIGUOUS_PROVIDER_WARNING
+    provider_name, provider = configured[0]
+    return provider_name, provider, None
 
 
 def _serialize_dataclass(value: Any) -> Any:

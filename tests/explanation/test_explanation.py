@@ -110,6 +110,55 @@ def test_analyze_move_does_not_call_provider() -> None:
     provider.complete.assert_not_called()
 
 
+def test_analyze_position_returns_best_move_analysis() -> None:
+    explainer = _make_explainer()
+    result = explainer.analyze_position(STARTING_FEN)
+
+    assert result.best_move.move_uci == "e2e4"
+    assert result.move_played_uci == "e2e4"
+
+
+def test_build_structured_explanation_returns_typed_payload() -> None:
+    from chesscoach.explanation.models import StructuredExplanation
+
+    explainer = _make_explainer()
+    explained = explainer.analyze_position(STARTING_FEN)
+    structured = explainer.build_structured_explanation(explained)
+
+    assert isinstance(structured, StructuredExplanation)
+    assert structured.summary
+    assert structured.what_the_move_does
+    assert structured.why_it_is_best
+
+
+def test_build_structured_explanation_includes_alternatives() -> None:
+    explainer = _make_explainer()
+    explained = explainer.analyze_position(STARTING_FEN)
+    structured = explainer.build_structured_explanation(explained)
+
+    assert structured.alternatives
+    assert structured.alternatives[0].move_san == "d4"
+
+
+def test_narrate_explanation_uses_structured_input() -> None:
+    engine = MagicMock()
+    engine.get_best_moves.return_value = [
+        MoveAnalysis("e4", "e2e4", 35, None, 20, []),
+        MoveAnalysis("d4", "d2d4", 20, None, 20, []),
+    ]
+    provider = MagicMock()
+    provider.complete.return_value = "Strong center control."
+
+    explainer = Explainer(engine, provider)
+    explained = explainer.analyze_position(STARTING_FEN)
+    structured = explainer.build_structured_explanation(explained)
+
+    text = explainer.narrate_explanation(explained, structured)
+
+    assert text == "Strong center control."
+    provider.complete.assert_called_once()
+
+
 def test_explain_legacy_interface_works() -> None:
     explainer = _make_explainer("Legacy works!")
     result = explainer.explain(STARTING_FEN, SAMPLE_MOVES)

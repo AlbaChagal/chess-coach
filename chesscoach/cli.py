@@ -84,6 +84,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Attempt to explain the best engine move.",
     )
     image_parser.add_argument(
+        "--explanation-provider",
+        choices=["anthropic", "openai"],
+        default=None,
+        dest="explanation_provider",
+        help="Optional explanation provider override.",
+    )
+    image_parser.add_argument(
+        "--explanation-model",
+        default=None,
+        dest="explanation_model",
+        help="Optional explanation model override.",
+    )
+    image_parser.add_argument(
         "--json",
         action="store_true",
         help="Emit machine-readable JSON to stdout.",
@@ -123,6 +136,8 @@ def _run_image_command(args: argparse.Namespace) -> None:
         castling_rights=args.castling_rights,
         en_passant=args.en_passant,
         include_explanation=args.include_explanation,
+        explanation_provider=args.explanation_provider,
+        explanation_model=args.explanation_model,
     )
     result = run_coaching_pipeline(request)
 
@@ -154,8 +169,29 @@ def _print_human_readable_result(result) -> None:
             line = " ".join(move.continuation) if move.continuation else "-"
             print(f"{index}. {move.move_san} [{move.score_display()}] line: {line}")
 
-    if result.explanation is not None and result.explanation.explanation_text:
+    if result.explanation is not None and result.explanation.structured_explanation:
+        structured = result.explanation.structured_explanation
         print("Explanation:")
+        print(f"Summary: {structured.summary}")
+        print(f"What it does: {structured.what_the_move_does}")
+        print(f"Threat: {structured.what_it_threatens}")
+        print(f"Why best: {structured.why_it_is_best}")
+        print(
+            f"Why alternatives are worse: "
+            f"{structured.why_alternatives_are_worse}"
+        )
+        if structured.tactical_themes:
+            print(f"Tactical themes: {', '.join(structured.tactical_themes)}")
+        if structured.alternatives:
+            print("Alternatives:")
+            for alternative in structured.alternatives:
+                print(
+                    f"- {alternative.move_san} [{alternative.score_display}]: "
+                    f"{alternative.reason}"
+                )
+
+    if result.explanation is not None and result.explanation.explanation_text:
+        print("Narrative:")
         print(result.explanation.explanation_text)
 
     for warning in result.warnings:

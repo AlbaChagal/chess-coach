@@ -9,7 +9,13 @@ import chess
 from chesscoach.analysis.engine import ChessEngine
 from chesscoach.analysis.models import MoveAnalysis
 from chesscoach.explanation.classifier import classify_move
-from chesscoach.explanation.models import ExplainedMove
+from chesscoach.explanation.models import (
+    AlternativeExplanation,
+    ExplainedMove,
+    ExplanationError,
+    StructuredExplanation,
+    TacticInfo,
+)
 from chesscoach.explanation.prompt import build_prompt
 from chesscoach.explanation.providers import LLMProvider
 from chesscoach.explanation.tactics import detect_tactics
@@ -38,12 +44,62 @@ class Explainer:
     def __init__(
         self,
         engine: ChessEngine,
-        provider: LLMProvider,
+        provider: LLMProvider | None,
         top_n: int = 3,
     ) -> None:
         self._engine = engine
         self._provider = provider
         self._top_n = top_n
+
+    def analyze_position(self, fen_before: str) -> ExplainedMove:
+        """Analyze the engine's best move for the given position."""
+        board = self._parse_fen(fen_before)
+        engine_moves = self._engine.get_best_moves(board, self._top_n)
+        if not engine_moves:
+            raise ValueError("Engine returned no moves for this position.")
+
+        best_move = engine_moves[0]
+        return self.analyze_move(fen_before, best_move.move_uci)
+
+    def build_structured_explanation(
+        self,
+        explained: ExplainedMove,
+    ) -> StructuredExplanation:
+        """Convert engine and tactic output into a typed explanation payload."""
+        best_move = explained.best_move
+        tactical_themes = _collect_tactical_themes(explained.tactics_after_best)
+        summary = _build_summary(best_move, explained.tactics_after_best)
+        what_the_move_does = _build_what_the_move_does(best_move)
+        what_it_threatens = _build_what_it_threatens(explained.tactics_after_best)
+        why_it_is_best = _build_why_it_is_best(best_move, explained.alternatives)
+        alternatives = _build_alternative_explanations(
+            best_move,
+            explained.alternatives,
+        )
+        why_alternatives_are_worse = _build_why_alternatives_are_worse(
+            alternatives,
+        )
+        return StructuredExplanation(
+            summary=summary,
+            what_the_move_does=what_the_move_does,
+            what_it_threatens=what_it_threatens,
+            why_it_is_best=why_it_is_best,
+            why_alternatives_are_worse=why_alternatives_are_worse,
+            alternatives=alternatives,
+            tactical_themes=tactical_themes,
+        )
+
+    def narrate_explanation(
+        self,
+        explained: ExplainedMove,
+        structured: StructuredExplanation,
+    ) -> str:
+        """Turn a structured explanation into final coaching text via the LLM."""
+        if self._provider is None:
+            raise ExplanationError("No explanation provider configured.")
+        system, user = build_prompt(explained, structured)
+        LOGGER.debug("Calling LLM provider for explanation")
+        return self._provider.complete(system, user)
 
     def analyze_move(self, fen_before: str, move_uci: str) -> ExplainedMove:
         """Run the structural analysis pipeline without calling the LLM.
@@ -126,9 +182,8 @@ class Explainer:
             ExplanationError: If the LLM provider call fails.
         """
         explained = self.analyze_move(fen_before, move_uci)
-        system, user = build_prompt(explained)
-        LOGGER.debug("Calling LLM provider for explanation")
-        return self._provider.complete(system, user)
+        structured = self.build_structured_explanation(explained)
+        return self.narrate_explanation(explained, structured)
 
     def explain(self, fen: str, moves: list[MoveAnalysis]) -> str:
         """Explain the top engine move for a position (legacy interface).
@@ -199,3 +254,96 @@ class Explainer:
         if a.score_cp is not None:
             return -a.score_cp, None
         return None, None
+
+
+def _collect_tactical_themes(tactics: list[TacticInfo]) -> list[str]:
+    names = {tactic.name.replace("_", " ") for tactic in tactics}
+    return sorted(names)
+
+
+def _build_summary(best_move: MoveAnalysis, tactics: list[TacticInfo]) -> str:
+    if tactics:
+        return (
+            f"{best_move.move_san} is best because it immediately creates "
+            f"{tactics[0].description.lower()}."
+        )
+    return (
+        f"{best_move.move_san} is best because it keeps the strongest evaluation "
+        f"and the cleanest continuation."
+    )
+
+
+def _build_what_the_move_does(best_move: MoveAnalysis) -> str:
+    if best_move.continuation:
+        line = " ".join(best_move.continuation)
+        return (
+            f"It improves the position while preserving the best continuation: "
+            f"{line}."
+        )
+    return "It improves coordination and keeps the position under control."
+
+
+def _build_what_it_threatens(tactics: list[TacticInfo]) -> str:
+    if tactics:
+        return "; ".join(tactic.description for tactic in tactics)
+    return "It increases pressure and keeps stronger practical options available."
+
+
+def _build_why_it_is_best(
+    best_move: MoveAnalysis,
+    alternatives: list[MoveAnalysis],
+) -> str:
+    if not alternatives:
+        return (
+            f"It keeps the engine evaluation at {best_move.score_display()} with no "
+            f"equally strong alternative available."
+        )
+    alternative = alternatives[0]
+    gap = _score_gap_text(best_move, alternative)
+    return (
+        f"It holds {best_move.score_display()}, which is {gap} than "
+        f"{alternative.move_san}."
+    )
+
+
+def _build_alternative_explanations(
+    best_move: MoveAnalysis,
+    alternatives: list[MoveAnalysis],
+) -> list[AlternativeExplanation]:
+    items: list[AlternativeExplanation] = []
+    for alternative in alternatives:
+        gap = _score_gap_text(best_move, alternative)
+        items.append(
+            AlternativeExplanation(
+                move_san=alternative.move_san,
+                move_uci=alternative.move_uci,
+                score_display=alternative.score_display(),
+                reason=(
+                    f"It is {gap} than {best_move.move_san} and leads to a weaker "
+                    f"continuation."
+                ),
+            )
+        )
+    return items
+
+
+def _build_why_alternatives_are_worse(
+    alternatives: list[AlternativeExplanation],
+) -> str:
+    if not alternatives:
+        return "No other move reaches the same level of engine confidence here."
+    first = alternatives[0]
+    return (
+        f"{first.move_san} is the closest alternative, but {first.reason.lower()}"
+    )
+
+
+def _score_gap_text(best_move: MoveAnalysis, alternative: MoveAnalysis) -> str:
+    if best_move.score_cp is not None and alternative.score_cp is not None:
+        gap_cp = abs(best_move.score_cp - alternative.score_cp)
+        return f"about {gap_cp / 100:.2f} pawns better"
+    if best_move.score_mate is not None and alternative.score_mate is not None:
+        if best_move.score_mate == alternative.score_mate:
+            return "roughly equal in mating terms"
+        return "stronger in mating terms"
+    return "stronger"

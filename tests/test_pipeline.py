@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from chesscoach.analysis.models import MoveAnalysis
+from chesscoach.explanation.models import StructuredExplanation
 from chesscoach.pipeline import (
     LOW_CONFIDENCE_WARNING,
     coaching_result_to_dict,
@@ -16,6 +17,7 @@ from chesscoach.pipeline_models import (
     CompletedPosition,
     ExplanationResult,
     ImageClick,
+    PipelineWarning,
     VisionResult,
 )
 
@@ -31,6 +33,8 @@ def make_request(**overrides) -> CoachingRequest:
         "castling_rights": None,
         "en_passant": None,
         "include_explanation": False,
+        "explanation_provider": None,
+        "explanation_model": None,
         "top_n": 3,
     }
     values.update(overrides)
@@ -195,7 +199,11 @@ def test_pipeline_success_path_runs_analysis_and_skips_explanation(
 def test_run_explanation_skips_when_provider_unavailable(monkeypatch) -> None:
     monkeypatch.setattr(
         "chesscoach.pipeline._pick_explanation_provider",
-        lambda: (None, None),
+        lambda provider, model: (None, None, None),
+    )
+    monkeypatch.setattr(
+        "chesscoach.pipeline.Explainer.analyze_position",
+        lambda self, fen_before: self.analyze_move(fen_before, "e2e4"),
     )
 
     explanation, warnings = run_explanation(
@@ -204,13 +212,15 @@ def test_run_explanation_skips_when_provider_unavailable(monkeypatch) -> None:
         make_request(include_explanation=True),
     )
 
-    assert explanation.status == "skipped"
-    assert warnings[0].code == "explanation_skipped_unavailable"
+    assert explanation.status == "success"
+    assert explanation.structured_explanation is not None
+    assert warnings == []
 
 
 def test_run_explanation_returns_text_when_provider_available(monkeypatch) -> None:
     class _Provider:
-        pass
+        def complete(self, system: str, user: str) -> str:
+            return "Play e4 to control the center."
 
     class _Explainer:
         def __init__(self, engine, provider, top_n) -> None:
@@ -218,14 +228,44 @@ def test_run_explanation_returns_text_when_provider_available(monkeypatch) -> No
             self.provider = provider
             self.top_n = top_n
 
-        def explain_move(self, fen_before: str, move_uci: str) -> str:
+        def analyze_position(self, fen_before: str):
             assert fen_before == make_position().fen
+            return self.analyze_move(fen_before, "e2e4")
+
+        def analyze_move(self, fen_before: str, move_uci: str):
+            from chesscoach.explanation.models import ExplainedMove, MoveQuality
+
             assert move_uci == "e2e4"
+            return ExplainedMove(
+                fen_before=fen_before,
+                move_played_san="e4",
+                move_played_uci="e2e4",
+                quality=MoveQuality(label="best", cp_loss=0, emoji=""),
+                best_move=make_analysis_result().top_moves[0],
+                alternatives=make_analysis_result().top_moves[1:],
+                tactics_after_played=[],
+                tactics_after_best=[],
+            )
+
+        def build_structured_explanation(self, explained):
+            from chesscoach.explanation.models import StructuredExplanation
+
+            return StructuredExplanation(
+                summary="e4 takes the center.",
+                what_the_move_does="It claims central space.",
+                what_it_threatens="It opens lines for development.",
+                why_it_is_best="It keeps the strongest evaluation.",
+                why_alternatives_are_worse="The alternatives are less forcing.",
+                alternatives=[],
+                tactical_themes=[],
+            )
+
+        def narrate_explanation(self, explained, structured) -> str:
             return "Play e4 to control the center."
 
     monkeypatch.setattr(
         "chesscoach.pipeline._pick_explanation_provider",
-        lambda: ("openai", _Provider()),
+        lambda provider, model: ("openai", _Provider(), None),
     )
     monkeypatch.setattr("chesscoach.pipeline.Explainer", _Explainer)
 
@@ -238,8 +278,130 @@ def test_run_explanation_returns_text_when_provider_available(monkeypatch) -> No
     assert explanation.status == "success"
     assert explanation.provider == "openai"
     assert explanation.explanation_text is not None
+    assert explanation.structured_explanation is not None
     assert "control the center" in explanation.explanation_text
     assert warnings == []
+
+
+def test_run_explanation_returns_structured_only_on_ambiguous_provider(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "chesscoach.pipeline._pick_explanation_provider",
+        lambda provider, model: (
+            None,
+            None,
+            PipelineWarning(
+                code="explanation_skipped_ambiguous_provider",
+                message="ambiguous",
+            ),
+        ),
+    )
+
+    explanation, warnings = run_explanation(
+        make_position(),
+        make_analysis_result(),
+        make_request(include_explanation=True),
+    )
+
+    assert explanation.status == "success"
+    assert explanation.explanation_text is None
+    assert explanation.structured_explanation is not None
+    assert warnings[0].code == "explanation_skipped_ambiguous_provider"
+
+
+def test_run_explanation_keeps_structured_payload_when_text_generation_fails(
+    monkeypatch,
+) -> None:
+    class _Provider:
+        def complete(self, system: str, user: str) -> str:
+            raise AssertionError("should not be called directly")
+
+    class _Explainer:
+        def __init__(self, engine, provider, top_n) -> None:
+            self.provider = provider
+
+        def analyze_position(self, fen_before: str):
+            return type(
+                "Explained",
+                (),
+                {"best_move": make_analysis_result().top_moves[0]},
+            )()
+
+        def build_structured_explanation(self, explained):
+            from chesscoach.explanation.models import StructuredExplanation
+
+            return StructuredExplanation(
+                summary="e4 takes the center.",
+                what_the_move_does="It claims central space.",
+                what_it_threatens="It opens lines for development.",
+                why_it_is_best="It keeps the strongest evaluation.",
+                why_alternatives_are_worse="The alternatives are less forcing.",
+                alternatives=[],
+                tactical_themes=[],
+            )
+
+        def narrate_explanation(self, explained, structured) -> str:
+            from chesscoach.explanation.models import ExplanationError
+
+            raise ExplanationError("provider failed")
+
+    monkeypatch.setattr(
+        "chesscoach.pipeline._pick_explanation_provider",
+        lambda provider, model: ("openai", _Provider(), None),
+    )
+    monkeypatch.setattr("chesscoach.pipeline.Explainer", _Explainer)
+
+    explanation, warnings = run_explanation(
+        make_position(),
+        make_analysis_result(),
+        make_request(include_explanation=True),
+    )
+
+    assert explanation.status == "success"
+    assert explanation.structured_explanation is not None
+    assert explanation.explanation_text is None
+    assert warnings[0].code == "explanation_text_generation_failed"
+
+
+def test_pipeline_json_includes_structured_explanation(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "chesscoach.pipeline.predict_fen",
+        lambda image: STARTING_PLACEMENT,
+    )
+    monkeypatch.setattr(
+        "chesscoach.pipeline.run_analysis",
+        lambda position, top_n: make_analysis_result(),
+    )
+    monkeypatch.setattr(
+        "chesscoach.pipeline.run_explanation",
+        lambda position, analysis, request: (
+            ExplanationResult(
+                move_uci="e2e4",
+                move_san="e4",
+                explanation_text="Play e4 to control the center.",
+                structured_explanation=StructuredExplanation(
+                    summary="e4 takes the center.",
+                    what_the_move_does="It claims central space.",
+                    what_it_threatens="It opens lines.",
+                    why_it_is_best="It keeps the strongest evaluation.",
+                    why_alternatives_are_worse="Alternatives are slower.",
+                    alternatives=[],
+                    tactical_themes=[],
+                ),
+                provider="openai",
+                status="success",
+            ),
+            [],
+        ),
+    )
+
+    result = run_coaching_pipeline(make_request(include_explanation=True))
+    payload = coaching_result_to_dict(result)
+
+    assert payload["explanation"]["structured_explanation"]["summary"] == (
+        "e4 takes the center."
+    )
 
 
 def test_pipeline_does_not_require_real_engine_when_analysis_mocked(

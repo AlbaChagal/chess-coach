@@ -11,11 +11,19 @@ Public API::
 
 from chesscoach.analysis.models import MoveAnalysis
 from chesscoach.explanation.explainer import Explainer
-from chesscoach.explanation.models import ExplainedMove, ExplanationError, MoveQuality, TacticInfo
+from chesscoach.explanation.models import (
+    AlternativeExplanation,
+    ExplainedMove,
+    ExplanationError,
+    MoveQuality,
+    StructuredExplanation,
+    TacticInfo,
+)
 from chesscoach.explanation.providers import ClaudeProvider, LLMProvider, OpenAIProvider
 
 __all__ = [
     "ClaudeProvider",
+    "AlternativeExplanation",
     "Explainer",
     "ExplainedMove",
     "ExplanationError",
@@ -23,6 +31,7 @@ __all__ = [
     "MoveQuality",
     "OpenAIProvider",
     "PositionExplainer",
+    "StructuredExplanation",
     "TacticInfo",
 ]
 
