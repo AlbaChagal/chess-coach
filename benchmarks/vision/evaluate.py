@@ -34,7 +34,11 @@ from chesscoach.vision.board_localizer import (
     DEFAULT_BOARD_LOCALIZER_IMAGE_SIZE,
 )
 from chesscoach.vision.piece_classifier import PieceClassifier
-from chesscoach.vision.piece_detector import PieceDetector
+from chesscoach.vision.piece_detector import (
+    DEFAULT_DETECTOR_IMAGE_SIZE,
+    DEFAULT_SCORE_THRESHOLD,
+    PieceDetector,
+)
 from chesscoach.vision.predictor import predict_fen
 from benchmarks.vision.dataset import BoardSample, load_csv, load_json
 from benchmarks.vision.metrics import (
@@ -179,6 +183,20 @@ def main(argv: list[str] | None = None) -> None:
         help="Path to the detector checkpoint (.pt).",
     )
     parser.add_argument(
+        "--score-threshold",
+        type=float,
+        default=DEFAULT_SCORE_THRESHOLD,
+        dest="score_threshold",
+        help="Minimum detector score retained during inference.",
+    )
+    parser.add_argument(
+        "--image-size",
+        type=int,
+        default=DEFAULT_DETECTOR_IMAGE_SIZE,
+        dest="image_size",
+        help="Detector inference resize.",
+    )
+    parser.add_argument(
         "--occupancy-checkpoint",
         type=Path,
         default=None,
@@ -225,7 +243,11 @@ def main(argv: list[str] | None = None) -> None:
         LOGGER.info(f"Loaded {len(samples)} benchmark samples from {args.dataset}")
 
     if args.detector_checkpoint is not None:
-        classifier = PieceDetector(args.detector_checkpoint)
+        classifier = PieceDetector(
+            args.detector_checkpoint,
+            score_threshold=args.score_threshold,
+            image_size=args.image_size,
+        )
         model_name = args.detector_checkpoint.name
     elif args.occupancy_checkpoint and args.piece_checkpoint:
         classifier = PieceClassifier(
@@ -262,6 +284,8 @@ def main(argv: list[str] | None = None) -> None:
             "split": args.split,
             "n_samples": len(samples),
             "detector_checkpoint": str(args.detector_checkpoint),
+            "score_threshold": args.score_threshold,
+            "image_size": args.image_size,
             "board_localizer_checkpoint": str(args.board_localizer_checkpoint),
             "board_localizer_image_size": args.board_localizer_image_size,
             "occupancy_checkpoint": str(args.occupancy_checkpoint),

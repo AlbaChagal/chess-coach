@@ -24,7 +24,9 @@ def test_rerank_board_candidates_enforces_single_white_king() -> None:
         ],
     }
 
-    grid = rerank_board_candidates(square_candidates)
+    grid = rerank_board_candidates(
+        square_candidates,
+    )
 
     assert grid[0][4] == "wK"
     assert grid[7][4] == "wQ"
@@ -67,6 +69,8 @@ def test_rerank_board_candidates_can_choose_empty_for_weak_detection() -> None:
         ],
     }
 
-    grid = rerank_board_candidates(square_candidates)
+    grid = rerank_board_candidates(
+        square_candidates,
+    )
 
     assert grid[4][4] == "empty"

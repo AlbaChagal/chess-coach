@@ -14,6 +14,7 @@ from chesscoach.vision.board_localizer import (
 )
 from chesscoach.vision.piece_detector import (
     DEFAULT_DETECTOR_IMAGE_SIZE,
+    DEFAULT_SCORE_THRESHOLD,
     PieceDetector,
 )
 
@@ -35,7 +36,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--score-threshold",
         type=float,
-        default=0.05,
+        default=DEFAULT_SCORE_THRESHOLD,
         dest="score_threshold",
     )
     parser.add_argument(

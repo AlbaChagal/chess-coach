@@ -33,6 +33,7 @@ from chesscoach.vision.piece_assignment import (  # noqa: E402
 )
 from chesscoach.vision.piece_detector import (  # noqa: E402
     DEFAULT_DETECTOR_IMAGE_SIZE,
+    DEFAULT_SCORE_THRESHOLD,
     PieceDetector,
 )
 from chesscoach.vision.types import PieceLabel, SquareGrid  # noqa: E402
@@ -480,7 +481,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--score-threshold",
         type=float,
-        default=0.05,
+        default=DEFAULT_SCORE_THRESHOLD,
         dest="score_threshold",
     )
     parser.add_argument(

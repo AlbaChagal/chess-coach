@@ -62,7 +62,7 @@ def test_run_evaluation_reports_board_detection_failures(monkeypatch) -> None:
 def test_main_prefers_detector_checkpoint(monkeypatch, tmp_path: Path) -> None:
     dataset_path = tmp_path / "dataset.json"
     dataset_path.write_text("[]")
-    detector_calls: list[Path] = []
+    detector_calls: list[tuple[Path, float, int]] = []
 
     monkeypatch.setattr(evaluate_module, "_load_dataset", lambda path: [])
     monkeypatch.setattr(
@@ -79,7 +79,10 @@ def test_main_prefers_detector_checkpoint(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         evaluate_module,
         "PieceDetector",
-        lambda checkpoint=None: detector_calls.append(checkpoint) or _DetectorStub(checkpoint),
+        lambda checkpoint=None, score_threshold=0.35, image_size=640: (
+            detector_calls.append((checkpoint, score_threshold, image_size))
+            or _DetectorStub(checkpoint)
+        ),
     )
     monkeypatch.setattr(
         evaluate_module,
@@ -97,7 +100,7 @@ def test_main_prefers_detector_checkpoint(monkeypatch, tmp_path: Path) -> None:
         ]
     )
 
-    assert detector_calls == [Path("models/piece_detector.pt")]
+    assert detector_calls == [(Path("models/piece_detector.pt"), 0.28, 640)]
 
 
 def test_main_filters_dataset_by_split(monkeypatch, tmp_path: Path) -> None:
@@ -128,7 +131,13 @@ def test_main_filters_dataset_by_split(monkeypatch, tmp_path: Path) -> None:
             }
         ),
     )
-    monkeypatch.setattr(evaluate_module, "PieceDetector", lambda checkpoint=None: _DetectorStub(checkpoint))
+    monkeypatch.setattr(
+        evaluate_module,
+        "PieceDetector",
+        lambda checkpoint=None, score_threshold=0.35, image_size=640: _DetectorStub(
+            checkpoint
+        ),
+    )
     monkeypatch.setattr(
         evaluate_module,
         "BoardCornerLocalizer",
@@ -170,7 +179,13 @@ def test_main_passes_optional_board_localizer(monkeypatch, tmp_path: Path) -> No
             }
         ),
     )
-    monkeypatch.setattr(evaluate_module, "PieceDetector", lambda checkpoint=None: _DetectorStub(checkpoint))
+    monkeypatch.setattr(
+        evaluate_module,
+        "PieceDetector",
+        lambda checkpoint=None, score_threshold=0.35, image_size=640: _DetectorStub(
+            checkpoint
+        ),
+    )
     monkeypatch.setattr(
         evaluate_module,
         "BoardCornerLocalizer",
@@ -192,3 +207,49 @@ def test_main_passes_optional_board_localizer(monkeypatch, tmp_path: Path) -> No
 
     assert localizer_calls == [(Path("models/board_localizer.pt"), 640)]
     assert len(seen_localizers) == 1
+
+
+def test_main_passes_detector_threshold_and_image_size(
+    monkeypatch, tmp_path: Path
+) -> None:
+    dataset_path = tmp_path / "dataset.json"
+    dataset_path.write_text("[]")
+    detector_calls: list[tuple[Path, float, int]] = []
+
+    monkeypatch.setattr(evaluate_module, "_load_dataset", lambda path: [])
+    monkeypatch.setattr(
+        evaluate_module,
+        "run_evaluation",
+        lambda samples, classifier, board_localizer=None: {
+            "n_boards": 0,
+            "n_errors": 0,
+            "board_accuracy": 0.0,
+            "square_accuracy": 0.0,
+            "per_piece_accuracy": {},
+            "failure_breakdown": {},
+        },
+    )
+    monkeypatch.setattr(
+        evaluate_module,
+        "PieceDetector",
+        lambda checkpoint=None, score_threshold=0.35, image_size=640: (
+            detector_calls.append((checkpoint, score_threshold, image_size))
+            or _DetectorStub(checkpoint)
+        ),
+    )
+    monkeypatch.setattr(evaluate_module, "configure_logging", lambda level: None)
+
+    evaluate_module.main(
+        [
+            "--dataset",
+            str(dataset_path),
+            "--detector-checkpoint",
+            "models/piece_detector.pt",
+            "--score-threshold",
+            "0.08",
+            "--image-size",
+            "800",
+        ]
+    )
+
+    assert detector_calls == [(Path("models/piece_detector.pt"), 0.08, 800)]

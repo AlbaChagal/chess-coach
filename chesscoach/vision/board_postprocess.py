@@ -100,10 +100,7 @@ def rerank_board_candidates(
     best_grid = base_grid
     best_score = _score_grid(base_grid, square_candidates)
 
-    option_sets = [
-        _square_options(square_candidates[square])
-        for square in uncertain_squares
-    ]
+    option_sets = [_square_options(square_candidates[square]) for square in uncertain_squares]
     for option_combo in product(*option_sets):
         candidate_grid = [row[:] for row in base_grid]
         for square, candidate in zip(uncertain_squares, option_combo):
@@ -135,7 +132,9 @@ def _select_uncertain_squares(
     return [square for _, square in ranked_squares[:_MAX_UNCERTAIN_SQUARES]]
 
 
-def _square_options(candidates: list[SquareCandidate]) -> list[SquareCandidate]:
+def _square_options(
+    candidates: list[SquareCandidate],
+) -> list[SquareCandidate]:
     options = candidates[: _MAX_ALTERNATIVES_PER_SQUARE]
     top_candidate = candidates[0]
     if top_candidate.score <= _ALLOW_EMPTY_THRESHOLD:
