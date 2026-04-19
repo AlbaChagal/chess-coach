@@ -140,6 +140,52 @@ def test_build_structured_explanation_includes_alternatives() -> None:
     assert structured.alternatives[0].move_san == "d4"
 
 
+def test_build_played_move_result_returns_quality_fields() -> None:
+    explainer = _make_explainer()
+    explained = explainer.analyze_move(STARTING_FEN, "e2e4")
+    played = explainer.build_played_move_result(explained)
+
+    assert played.move_uci == "e2e4"
+    assert played.quality_label == explained.quality.label
+    assert played.cp_loss == explained.quality.cp_loss
+
+
+def test_build_best_move_comparison_returns_gap_text() -> None:
+    explainer = _make_explainer()
+    explained = explainer.analyze_move(STARTING_FEN, "d2d4")
+    comparison = explainer.build_best_move_comparison(explained)
+
+    assert comparison.best_move_san == "e4"
+    assert comparison.played_move_san == "d4"
+    assert comparison.why_best_move_is_better
+
+
+def test_build_structured_played_move_explanation_returns_typed_payload() -> None:
+    from chesscoach.explanation.models import StructuredPlayedMoveExplanation
+
+    explainer = _make_explainer()
+    explained = explainer.analyze_move(STARTING_FEN, "d2d4")
+    structured = explainer.build_structured_played_move_explanation(explained)
+
+    assert isinstance(structured, StructuredPlayedMoveExplanation)
+    assert structured.summary
+    assert structured.practical_lesson
+
+
+def test_narrate_played_move_explanation_uses_provider_once() -> None:
+    provider = MagicMock()
+    provider.complete.return_value = "You missed a cleaner move."
+    explainer = _make_explainer()
+    explainer._provider = provider
+    explained = explainer.analyze_move(STARTING_FEN, "d2d4")
+    structured = explainer.build_structured_played_move_explanation(explained)
+
+    text = explainer.narrate_played_move_explanation(explained, structured)
+
+    assert text == "You missed a cleaner move."
+    provider.complete.assert_called_once()
+
+
 def test_narrate_explanation_uses_structured_input() -> None:
     engine = MagicMock()
     engine.get_best_moves.return_value = [

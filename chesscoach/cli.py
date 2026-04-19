@@ -79,6 +79,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional en passant square override.",
     )
     image_parser.add_argument(
+        "--played-move-uci",
+        default=None,
+        dest="played_move_uci",
+        help="Optional played move in UCI format for coaching mode.",
+    )
+    image_parser.add_argument(
         "--include-explanation",
         action="store_true",
         help="Attempt to explain the best engine move.",
@@ -135,6 +141,7 @@ def _run_image_command(args: argparse.Namespace) -> None:
         ),
         castling_rights=args.castling_rights,
         en_passant=args.en_passant,
+        played_move_uci=args.played_move_uci,
         include_explanation=args.include_explanation,
         explanation_provider=args.explanation_provider,
         explanation_model=args.explanation_model,
@@ -169,26 +176,57 @@ def _print_human_readable_result(result) -> None:
             line = " ".join(move.continuation) if move.continuation else "-"
             print(f"{index}. {move.move_san} [{move.score_display()}] line: {line}")
 
+    if result.explanation is not None and result.explanation.played_move_result:
+        played = result.explanation.played_move_result
+        comparison = result.explanation.comparison
+        print("Played move coaching:")
+        print(f"Played move: {played.move_san}")
+        print(f"Quality: {played.quality_label} {played.quality_emoji}".strip())
+        print(f"Centipawn loss: {played.cp_loss}")
+        if comparison is not None:
+            print(
+                f"Best move: {comparison.best_move_san} "
+                f"[{comparison.best_move_score_display}]"
+            )
+            print(f"Why best was better: {comparison.why_best_move_is_better}")
+
     if result.explanation is not None and result.explanation.structured_explanation:
         structured = result.explanation.structured_explanation
         print("Explanation:")
-        print(f"Summary: {structured.summary}")
-        print(f"What it does: {structured.what_the_move_does}")
-        print(f"Threat: {structured.what_it_threatens}")
-        print(f"Why best: {structured.why_it_is_best}")
-        print(
-            f"Why alternatives are worse: "
-            f"{structured.why_alternatives_are_worse}"
-        )
-        if structured.tactical_themes:
-            print(f"Tactical themes: {', '.join(structured.tactical_themes)}")
-        if structured.alternatives:
-            print("Alternatives:")
-            for alternative in structured.alternatives:
-                print(
-                    f"- {alternative.move_san} [{alternative.score_display}]: "
-                    f"{alternative.reason}"
-                )
+        if result.explanation.played_move_result is None:
+            print(f"Summary: {structured.summary}")
+            print(f"What it does: {structured.what_the_move_does}")
+            print(f"Threat: {structured.what_it_threatens}")
+            print(f"Why best: {structured.why_it_is_best}")
+            print(
+                f"Why alternatives are worse: "
+                f"{structured.why_alternatives_are_worse}"
+            )
+            if structured.tactical_themes:
+                print(f"Tactical themes: {', '.join(structured.tactical_themes)}")
+            if structured.alternatives:
+                print("Alternatives:")
+                for alternative in structured.alternatives:
+                    print(
+                        f"- {alternative.move_san} [{alternative.score_display}]: "
+                        f"{alternative.reason}"
+                    )
+        else:
+            print(f"Summary: {structured.summary}")
+            print(f"Move intent: {structured.what_the_move_tried_to_do}")
+            print(f"What was missed: {structured.what_was_missed}")
+            print(f"What changed: {structured.what_changed_after_move}")
+            print(f"Why best was better: {structured.why_best_move_was_better}")
+            print(f"Lesson: {structured.practical_lesson}")
+            if structured.tactical_themes:
+                print(f"Tactical themes: {', '.join(structured.tactical_themes)}")
+            if structured.alternatives:
+                print("Alternatives:")
+                for alternative in structured.alternatives:
+                    print(
+                        f"- {alternative.move_san} [{alternative.score_display}]: "
+                        f"{alternative.reason}"
+                    )
 
     if result.explanation is not None and result.explanation.explanation_text:
         print("Narrative:")

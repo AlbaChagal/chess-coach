@@ -11,12 +11,18 @@ from chesscoach.analysis.models import MoveAnalysis
 from chesscoach.explanation.classifier import classify_move
 from chesscoach.explanation.models import (
     AlternativeExplanation,
+    BestMoveComparison,
     ExplainedMove,
     ExplanationError,
+    PlayedMoveResult,
     StructuredExplanation,
+    StructuredPlayedMoveExplanation,
     TacticInfo,
 )
-from chesscoach.explanation.prompt import build_prompt
+from chesscoach.explanation.prompt import (
+    build_best_move_prompt,
+    build_played_move_prompt,
+)
 from chesscoach.explanation.providers import LLMProvider
 from chesscoach.explanation.tactics import detect_tactics
 
@@ -97,8 +103,75 @@ class Explainer:
         """Turn a structured explanation into final coaching text via the LLM."""
         if self._provider is None:
             raise ExplanationError("No explanation provider configured.")
-        system, user = build_prompt(explained, structured)
+        system, user = build_best_move_prompt(explained, structured)
         LOGGER.debug("Calling LLM provider for explanation")
+        return self._provider.complete(system, user)
+
+    def build_played_move_result(
+        self,
+        explained: ExplainedMove,
+    ) -> PlayedMoveResult:
+        """Build a typed summary of the move the user actually played."""
+        return PlayedMoveResult(
+            move_uci=explained.move_played_uci,
+            move_san=explained.move_played_san,
+            quality_label=explained.quality.label,
+            quality_emoji=explained.quality.emoji,
+            cp_loss=explained.quality.cp_loss,
+            tactics_after_played=[
+                tactic.description for tactic in explained.tactics_after_played
+            ],
+            tactics_after_best=[
+                tactic.description for tactic in explained.tactics_after_best
+            ],
+        )
+
+    def build_best_move_comparison(
+        self,
+        explained: ExplainedMove,
+    ) -> BestMoveComparison:
+        """Build a typed comparison between played and best moves."""
+        return BestMoveComparison(
+            best_move_uci=explained.best_move.move_uci,
+            best_move_san=explained.best_move.move_san,
+            best_move_score_display=explained.best_move.score_display(),
+            played_move_uci=explained.move_played_uci,
+            played_move_san=explained.move_played_san,
+            played_move_quality=explained.quality.label,
+            cp_loss=explained.quality.cp_loss,
+            why_best_move_is_better=_build_played_move_best_move_gap(explained),
+        )
+
+    def build_structured_played_move_explanation(
+        self,
+        explained: ExplainedMove,
+    ) -> StructuredPlayedMoveExplanation:
+        """Convert a played-move comparison into typed coaching output."""
+        alternatives = _build_alternative_explanations(
+            explained.best_move,
+            explained.alternatives,
+        )
+        return StructuredPlayedMoveExplanation(
+            summary=_build_played_move_summary(explained),
+            what_the_move_tried_to_do=_build_played_move_intent(explained),
+            what_was_missed=_build_what_was_missed(explained),
+            what_changed_after_move=_build_what_changed_after_move(explained),
+            why_best_move_was_better=_build_played_move_best_move_gap(explained),
+            practical_lesson=_build_practical_lesson(explained),
+            tactical_themes=_collect_tactical_themes(explained.tactics_after_best),
+            alternatives=alternatives,
+        )
+
+    def narrate_played_move_explanation(
+        self,
+        explained: ExplainedMove,
+        structured: StructuredPlayedMoveExplanation,
+    ) -> str:
+        """Turn a played-move coaching payload into final narration."""
+        if self._provider is None:
+            raise ExplanationError("No explanation provider configured.")
+        system, user = build_played_move_prompt(explained, structured)
+        LOGGER.debug("Calling LLM provider for played-move explanation")
         return self._provider.complete(system, user)
 
     def analyze_move(self, fen_before: str, move_uci: str) -> ExplainedMove:
@@ -347,3 +420,64 @@ def _score_gap_text(best_move: MoveAnalysis, alternative: MoveAnalysis) -> str:
             return "roughly equal in mating terms"
         return "stronger in mating terms"
     return "stronger"
+
+
+def _build_played_move_summary(explained: ExplainedMove) -> str:
+    if explained.quality.label == "best":
+        return (
+            f"{explained.move_played_san} matches the engine's top choice and keeps "
+            "the best continuation available."
+        )
+    return (
+        f"{explained.move_played_san} is a {explained.quality.label} that loses "
+        f"about {explained.quality.cp_loss / 100:.2f} pawns compared to "
+        f"{explained.best_move.move_san}."
+    )
+
+
+def _build_played_move_intent(explained: ExplainedMove) -> str:
+    if explained.tactics_after_played:
+        return (
+            f"It seems to aim for {explained.tactics_after_played[0].description.lower()}."
+        )
+    return "It appears to improve the position, but without matching the best line."
+
+
+def _build_what_was_missed(explained: ExplainedMove) -> str:
+    if explained.tactics_after_best:
+        return "; ".join(tactic.description for tactic in explained.tactics_after_best)
+    return (
+        f"The move misses the cleaner idea behind {explained.best_move.move_san} and "
+        "gives up some of the engine advantage."
+    )
+
+
+def _build_what_changed_after_move(explained: ExplainedMove) -> str:
+    if explained.tactics_after_played:
+        return "; ".join(tactic.description for tactic in explained.tactics_after_played)
+    return "The position becomes less precise and gives the opponent easier play."
+
+
+def _build_played_move_best_move_gap(explained: ExplainedMove) -> str:
+    if explained.quality.cp_loss == 0:
+        return (
+            f"{explained.best_move.move_san} was not better in engine terms; the "
+            "played move already matches the top choice."
+        )
+    return (
+        f"{explained.best_move.move_san} keeps the position about "
+        f"{explained.quality.cp_loss / 100:.2f} pawns stronger and preserves the "
+        "cleaner continuation."
+    )
+
+
+def _build_practical_lesson(explained: ExplainedMove) -> str:
+    if explained.tactics_after_best:
+        return (
+            "Before moving, compare your candidate move with forcing tactical ideas "
+            "that improve activity or create direct threats."
+        )
+    return (
+        "Before committing, compare your move with the engine's most active option "
+        "and check what concrete pressure you are giving up."
+    )

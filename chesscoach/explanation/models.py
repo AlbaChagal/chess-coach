@@ -64,5 +64,46 @@ class StructuredExplanation:
     tactical_themes: list[str]
 
 
+@dataclass(frozen=True)
+class PlayedMoveResult:
+    """Typed summary of the move the user actually played."""
+
+    move_uci: str
+    move_san: str
+    quality_label: MoveLabel
+    quality_emoji: str
+    cp_loss: int
+    tactics_after_played: list[str]
+    tactics_after_best: list[str]
+
+
+@dataclass(frozen=True)
+class BestMoveComparison:
+    """Comparison between the played move and the engine's best move."""
+
+    best_move_uci: str
+    best_move_san: str
+    best_move_score_display: str
+    played_move_uci: str
+    played_move_san: str
+    played_move_quality: MoveLabel
+    cp_loss: int
+    why_best_move_is_better: str
+
+
+@dataclass(frozen=True)
+class StructuredPlayedMoveExplanation:
+    """Typed coaching payload for evaluating a played move."""
+
+    summary: str
+    what_the_move_tried_to_do: str
+    what_was_missed: str
+    what_changed_after_move: str
+    why_best_move_was_better: str
+    practical_lesson: str
+    tactical_themes: list[str]
+    alternatives: list[AlternativeExplanation]
+
+
 class ExplanationError(Exception):
     """Raised when the LLM provider call fails."""

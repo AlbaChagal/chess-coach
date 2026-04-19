@@ -13,10 +13,13 @@ from chesscoach.analysis.models import MoveAnalysis
 from chesscoach.explanation.explainer import Explainer
 from chesscoach.explanation.models import (
     AlternativeExplanation,
+    BestMoveComparison,
     ExplainedMove,
     ExplanationError,
     MoveQuality,
+    PlayedMoveResult,
     StructuredExplanation,
+    StructuredPlayedMoveExplanation,
     TacticInfo,
 )
 from chesscoach.explanation.providers import ClaudeProvider, LLMProvider, OpenAIProvider
@@ -24,14 +27,17 @@ from chesscoach.explanation.providers import ClaudeProvider, LLMProvider, OpenAI
 __all__ = [
     "ClaudeProvider",
     "AlternativeExplanation",
+    "BestMoveComparison",
     "Explainer",
     "ExplainedMove",
     "ExplanationError",
     "LLMProvider",
     "MoveQuality",
     "OpenAIProvider",
+    "PlayedMoveResult",
     "PositionExplainer",
     "StructuredExplanation",
+    "StructuredPlayedMoveExplanation",
     "TacticInfo",
 ]
 

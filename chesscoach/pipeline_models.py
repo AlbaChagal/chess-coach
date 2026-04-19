@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import Literal
 
 from chesscoach.analysis.models import MoveAnalysis
-from chesscoach.explanation.models import StructuredExplanation
+from chesscoach.explanation.models import (
+    BestMoveComparison,
+    PlayedMoveResult,
+    StructuredExplanation,
+    StructuredPlayedMoveExplanation,
+)
 
 OrientationStatus = Literal["missing_click", "user_marked", "resolved", "failed"]
 AnalysisStatus = Literal["success", "skipped", "failed"]
@@ -41,6 +46,7 @@ class CoachingRequest:
     white_king_start_click: ImageClick | None = None
     castling_rights: str | None = None
     en_passant: str | None = None
+    played_move_uci: str | None = None
     include_explanation: bool = False
     explanation_provider: Literal["anthropic", "openai"] | None = None
     explanation_model: str | None = None
@@ -91,7 +97,11 @@ class ExplanationResult:
     move_uci: str | None
     move_san: str | None
     explanation_text: str | None
-    structured_explanation: StructuredExplanation | None
+    structured_explanation: (
+        StructuredExplanation | StructuredPlayedMoveExplanation | None
+    )
+    played_move_result: PlayedMoveResult | None
+    comparison: BestMoveComparison | None
     provider: str | None
     status: ExplanationStatus
 

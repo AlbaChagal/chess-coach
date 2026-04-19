@@ -15,6 +15,11 @@ from chesscoach.pipeline_models import (
     VisionResult,
 )
 from chesscoach.explanation.models import StructuredExplanation
+from chesscoach.explanation.models import (
+    BestMoveComparison,
+    PlayedMoveResult,
+    StructuredPlayedMoveExplanation,
+)
 
 STARTING_PLACEMENT = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
 
@@ -58,6 +63,8 @@ def make_pipeline_result(**overrides) -> CoachingResult:
                 alternatives=[],
                 tactical_themes=["fork"],
             ),
+            played_move_result=None,
+            comparison=None,
             provider=None,
             status="success",
         ),
@@ -204,6 +211,74 @@ def test_image_subcommand_passes_explanation_provider_and_model(
     assert captured_request["request"].include_explanation is True
     assert captured_request["request"].explanation_provider == "openai"
     assert captured_request["request"].explanation_model == "gpt-4o-mini"
+
+
+def test_image_subcommand_passes_played_move_uci(capsys, monkeypatch) -> None:
+    captured_request = {}
+
+    def _run_pipeline(request):
+        captured_request["request"] = request
+        return make_pipeline_result(
+            explanation=ExplanationResult(
+                move_uci="d2d4",
+                move_san="d4",
+                explanation_text="You missed a cleaner move.",
+                structured_explanation=StructuredPlayedMoveExplanation(
+                    summary="d4 is playable but misses e4.",
+                    what_the_move_tried_to_do="It tries to claim central space.",
+                    what_was_missed="It misses the cleaner central option.",
+                    what_changed_after_move="Black gets a simpler reply.",
+                    why_best_move_was_better="e4 keeps the stronger edge.",
+                    practical_lesson="Compare candidate moves for activity.",
+                    tactical_themes=[],
+                    alternatives=[],
+                ),
+                played_move_result=PlayedMoveResult(
+                    move_uci="d2d4",
+                    move_san="d4",
+                    quality_label="inaccuracy",
+                    quality_emoji="?!",
+                    cp_loss=15,
+                    tactics_after_played=[],
+                    tactics_after_best=[],
+                ),
+                comparison=BestMoveComparison(
+                    best_move_uci="e2e4",
+                    best_move_san="e4",
+                    best_move_score_display="+0.35",
+                    played_move_uci="d2d4",
+                    played_move_san="d4",
+                    played_move_quality="inaccuracy",
+                    cp_loss=15,
+                    why_best_move_is_better="e4 keeps the stronger edge.",
+                ),
+                provider=None,
+                status="success",
+            )
+        )
+
+    monkeypatch.setattr("chesscoach.cli.run_coaching_pipeline", _run_pipeline)
+
+    from chesscoach.cli import main
+
+    main(
+        [
+            "image",
+            "board.jpg",
+            "--white-king-start-click-x",
+            "12",
+            "--white-king-start-click-y",
+            "34",
+            "--played-move-uci",
+            "d2d4",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert captured_request["request"].played_move_uci == "d2d4"
+    assert "Played move coaching:" in captured.out
+    assert "Quality: inaccuracy ?!" in captured.out
+    assert "Why best was better: e4 keeps the stronger edge." in captured.out
 
 
 def test_image_subcommand_failure_exits(capsys, monkeypatch) -> None:

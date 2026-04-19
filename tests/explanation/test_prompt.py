@@ -6,10 +6,14 @@ from chesscoach.analysis.models import MoveAnalysis
 from chesscoach.explanation.models import (
     ExplainedMove,
     MoveQuality,
+    StructuredPlayedMoveExplanation,
     StructuredExplanation,
     TacticInfo,
 )
-from chesscoach.explanation.prompt import build_prompt
+from chesscoach.explanation.prompt import (
+    build_best_move_prompt,
+    build_played_move_prompt,
+)
 
 _BEST = MoveAnalysis("Nf3", "g1f3", 35, None, 20, ["d5", "d4", "Nf6"])
 _ALTERNATIVES = [MoveAnalysis("d4", "d2d4", 30, None, 20, [])]
@@ -48,39 +52,39 @@ def _make_structured() -> StructuredExplanation:
 
 
 def test_build_prompt_returns_tuple_of_strings() -> None:
-    system, user = build_prompt(_make_explained(), _make_structured())
+    system, user = build_best_move_prompt(_make_explained(), _make_structured())
     assert isinstance(system, str)
     assert isinstance(user, str)
 
 
 def test_system_prompt_non_empty() -> None:
-    system, _ = build_prompt(_make_explained(), _make_structured())
+    system, _ = build_best_move_prompt(_make_explained(), _make_structured())
     assert len(system) > 0
 
 
 def test_user_prompt_contains_fen() -> None:
-    _, user = build_prompt(_make_explained(), _make_structured())
+    _, user = build_best_move_prompt(_make_explained(), _make_structured())
     assert "rnbqkbnr" in user
 
 
 def test_user_prompt_contains_move_san() -> None:
-    _, user = build_prompt(_make_explained(), _make_structured())
+    _, user = build_best_move_prompt(_make_explained(), _make_structured())
     assert "Nf3" in user
 
 
 def test_user_prompt_contains_structured_summary() -> None:
-    _, user = build_prompt(_make_explained(), _make_structured())
+    _, user = build_best_move_prompt(_make_explained(), _make_structured())
     assert "keeps the strongest setup" in user
 
 
 def test_user_prompt_contains_best_move_san() -> None:
-    _, user = build_prompt(_make_explained(), _make_structured())
+    _, user = build_best_move_prompt(_make_explained(), _make_structured())
     assert "Nf3" in user
 
 
 def test_tactics_section_present_when_tactics_detected() -> None:
     tactic = TacticInfo(name="hanging_piece", description="Rook on e4 is hanging.")
-    _, user = build_prompt(
+    _, user = build_best_move_prompt(
         _make_explained(tactics_played=[tactic]),
         _make_structured(),
     )
@@ -88,16 +92,41 @@ def test_tactics_section_present_when_tactics_detected() -> None:
 
 
 def test_tactics_section_none_when_empty() -> None:
-    _, user = build_prompt(_make_explained(tactics_played=[]), _make_structured())
+    _, user = build_best_move_prompt(
+        _make_explained(tactics_played=[]),
+        _make_structured(),
+    )
     assert "None detected" in user
 
 
 def test_best_move_line_in_prompt() -> None:
-    _, user = build_prompt(_make_explained(), _make_structured())
+    _, user = build_best_move_prompt(_make_explained(), _make_structured())
     # Continuation moves should appear.
     assert "d5" in user
 
 
 def test_prompt_contains_why_alternatives_are_worse() -> None:
-    _, user = build_prompt(_make_explained(quality=_QUALITY_BEST), _make_structured())
+    _, user = build_best_move_prompt(
+        _make_explained(quality=_QUALITY_BEST),
+        _make_structured(),
+    )
     assert "alternatives are worse" in user.lower()
+
+
+def test_played_move_prompt_contains_played_move_fields() -> None:
+    structured = StructuredPlayedMoveExplanation(
+        summary="e5 is a blunder compared to Nf3.",
+        what_the_move_tried_to_do="It tries to grab space.",
+        what_was_missed="It misses a stronger developing move.",
+        what_changed_after_move="It creates tactical problems.",
+        why_best_move_was_better="Nf3 keeps the position cleaner.",
+        practical_lesson="Compare forcing replies before pushing pawns.",
+        tactical_themes=["fork"],
+        alternatives=[],
+    )
+
+    _, user = build_played_move_prompt(_make_explained(), structured)
+
+    assert "Played move: e5" in user
+    assert "What was missed" in user
+    assert "Practical lesson" in user

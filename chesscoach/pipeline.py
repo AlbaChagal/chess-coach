@@ -20,7 +20,11 @@ from chesscoach.explanation import (
     LLMProvider,
     OpenAIProvider,
 )
-from chesscoach.explanation.models import ExplanationError, StructuredExplanation
+from chesscoach.explanation.models import (
+    ExplanationError,
+    StructuredExplanation,
+    StructuredPlayedMoveExplanation,
+)
 from chesscoach.pipeline_models import (
     AnalysisResult,
     CoachingRequest,
@@ -167,6 +171,8 @@ def run_explanation(
                 move_san=None,
                 explanation_text=None,
                 structured_explanation=None,
+                played_move_result=None,
+                comparison=None,
                 provider=None,
                 status="skipped",
             ),
@@ -179,6 +185,8 @@ def run_explanation(
                 move_san=None,
                 explanation_text=None,
                 structured_explanation=None,
+                played_move_result=None,
+                comparison=None,
                 provider=None,
                 status="skipped",
             ),
@@ -193,28 +201,75 @@ def run_explanation(
     engine = ChessEngine()
     provider_name: str | None = None
     explained = None
-    structured: StructuredExplanation | None = None
+    structured = None
+    played_move_result = None
+    comparison = None
     try:
         provider_name, provider, provider_warning = _pick_explanation_provider(
             request.explanation_provider,
             request.explanation_model,
         )
         explainer = Explainer(engine, provider, top_n=request.top_n)
-        explained = explainer.analyze_position(position.fen)
-        structured = explainer.build_structured_explanation(explained)
+        mode_warning: PipelineWarning | None = None
+        if request.played_move_uci is None:
+            explained = explainer.analyze_position(position.fen)
+            structured = explainer.build_structured_explanation(explained)
+        else:
+            try:
+                explained = explainer.analyze_move(position.fen, request.played_move_uci)
+                structured = explainer.build_structured_played_move_explanation(
+                    explained
+                )
+                played_move_result = explainer.build_played_move_result(explained)
+                comparison = explainer.build_best_move_comparison(explained)
+            except ValueError as exc:
+                warning_code = (
+                    "played_move_illegal"
+                    if "Illegal move" in str(exc)
+                    else "played_move_invalid"
+                )
+                mode_warning = PipelineWarning(
+                    code=warning_code,
+                    message=str(exc),
+                )
+                explained = explainer.analyze_position(position.fen)
+                structured = explainer.build_structured_explanation(explained)
         if provider is None:
             return (
                 ExplanationResult(
-                    move_uci=explained.best_move.move_uci,
-                    move_san=explained.best_move.move_san,
+                    move_uci=(
+                        explained.move_played_uci
+                        if played_move_result is not None
+                        else explained.best_move.move_uci
+                    ),
+                    move_san=(
+                        explained.move_played_san
+                        if played_move_result is not None
+                        else explained.best_move.move_san
+                    ),
                     explanation_text=None,
                     structured_explanation=structured,
+                    played_move_result=played_move_result,
+                    comparison=comparison,
                     provider=provider_name,
                     status="success",
                 ),
-                [provider_warning] if provider_warning is not None else [],
+                [
+                    warning
+                    for warning in (mode_warning, provider_warning)
+                    if warning is not None
+                ],
             )
-        explanation_text = explainer.narrate_explanation(explained, structured)
+        if played_move_result is not None:
+            explanation_text = explainer.narrate_played_move_explanation(
+                explained,
+                cast(StructuredPlayedMoveExplanation, structured),
+            )
+        else:
+            explanation_text = explainer.narrate_explanation(
+                explained,
+                cast(StructuredExplanation, structured),
+            )
     except ValueError as exc:
         return (
             ExplanationResult(
@@ -222,6 +277,8 @@ def run_explanation(
                 move_san=analysis.top_moves[0].move_san,
                 explanation_text=None,
                 structured_explanation=None,
+                played_move_result=None,
+                comparison=None,
                 provider=None,
                 status="failed",
             ),
@@ -240,6 +297,8 @@ def run_explanation(
                     move_san=analysis.top_moves[0].move_san,
                     explanation_text=None,
                     structured_explanation=None,
+                    played_move_result=None,
+                    comparison=None,
                     provider=provider_name,
                     status="failed",
                 ),
@@ -252,10 +311,20 @@ def run_explanation(
             )
         return (
             ExplanationResult(
-                move_uci=explained.best_move.move_uci,
-                move_san=explained.best_move.move_san,
+                move_uci=(
+                    explained.move_played_uci
+                    if played_move_result is not None
+                    else explained.best_move.move_uci
+                ),
+                move_san=(
+                    explained.move_played_san
+                    if played_move_result is not None
+                    else explained.best_move.move_san
+                ),
                 explanation_text=None,
                 structured_explanation=structured,
+                played_move_result=played_move_result,
+                comparison=comparison,
                 provider=provider_name,
                 status="success",
             ),
@@ -271,10 +340,20 @@ def run_explanation(
 
     return (
         ExplanationResult(
-            move_uci=explained.best_move.move_uci,
-            move_san=explained.best_move.move_san,
+            move_uci=(
+                explained.move_played_uci
+                if played_move_result is not None
+                else explained.best_move.move_uci
+            ),
+            move_san=(
+                explained.move_played_san
+                if played_move_result is not None
+                else explained.best_move.move_san
+            ),
             explanation_text=explanation_text,
             structured_explanation=structured,
+            played_move_result=played_move_result,
+            comparison=comparison,
             provider=provider_name,
             status="success",
         ),

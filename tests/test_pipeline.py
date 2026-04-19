@@ -3,7 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from chesscoach.analysis.models import MoveAnalysis
-from chesscoach.explanation.models import StructuredExplanation
+from chesscoach.explanation.models import (
+    BestMoveComparison,
+    PlayedMoveResult,
+    StructuredExplanation,
+    StructuredPlayedMoveExplanation,
+)
 from chesscoach.pipeline import (
     LOW_CONFIDENCE_WARNING,
     coaching_result_to_dict,
@@ -32,6 +37,7 @@ def make_request(**overrides) -> CoachingRequest:
         "white_king_start_click": CLICK,
         "castling_rights": None,
         "en_passant": None,
+        "played_move_uci": None,
         "include_explanation": False,
         "explanation_provider": None,
         "explanation_model": None,
@@ -191,6 +197,8 @@ def test_pipeline_success_path_runs_analysis_and_skips_explanation(
         move_san=None,
         explanation_text=None,
         structured_explanation=None,
+        played_move_result=None,
+        comparison=None,
         provider=None,
         status="skipped",
     )
@@ -214,6 +222,7 @@ def test_run_explanation_skips_when_provider_unavailable(monkeypatch) -> None:
 
     assert explanation.status == "success"
     assert explanation.structured_explanation is not None
+    assert explanation.played_move_result is None
     assert warnings == []
 
 
@@ -273,12 +282,13 @@ def test_run_explanation_returns_text_when_provider_available(monkeypatch) -> No
         make_position(),
         make_analysis_result(),
         make_request(include_explanation=True),
-    )
+        )
 
     assert explanation.status == "success"
     assert explanation.provider == "openai"
     assert explanation.explanation_text is not None
     assert explanation.structured_explanation is not None
+    assert explanation.played_move_result is None
     assert "control the center" in explanation.explanation_text
     assert warnings == []
 
@@ -307,6 +317,7 @@ def test_run_explanation_returns_structured_only_on_ambiguous_provider(
     assert explanation.status == "success"
     assert explanation.explanation_text is None
     assert explanation.structured_explanation is not None
+    assert explanation.played_move_result is None
     assert warnings[0].code == "explanation_skipped_ambiguous_provider"
 
 
@@ -361,7 +372,145 @@ def test_run_explanation_keeps_structured_payload_when_text_generation_fails(
     assert explanation.status == "success"
     assert explanation.structured_explanation is not None
     assert explanation.explanation_text is None
+    assert explanation.played_move_result is None
     assert warnings[0].code == "explanation_text_generation_failed"
+
+
+def test_run_explanation_returns_played_move_payload(monkeypatch) -> None:
+    class _Provider:
+        def complete(self, system: str, user: str) -> str:
+            return "You missed a cleaner move."
+
+    class _Explainer:
+        def __init__(self, engine, provider, top_n) -> None:
+            self.provider = provider
+
+        def analyze_move(self, fen_before: str, move_uci: str):
+            from chesscoach.explanation.models import ExplainedMove, MoveQuality
+
+            assert move_uci == "d2d4"
+            return ExplainedMove(
+                fen_before=fen_before,
+                move_played_san="d4",
+                move_played_uci="d2d4",
+                quality=MoveQuality(label="inaccuracy", cp_loss=15, emoji="?!"),
+                best_move=make_analysis_result().top_moves[0],
+                alternatives=make_analysis_result().top_moves[1:],
+                tactics_after_played=[],
+                tactics_after_best=[],
+            )
+
+        def build_structured_played_move_explanation(self, explained):
+            return StructuredPlayedMoveExplanation(
+                summary="d4 is playable but misses the cleaner move e4.",
+                what_the_move_tried_to_do="It tries to claim central space.",
+                what_was_missed="It misses the most direct central grip.",
+                what_changed_after_move="Black gets a simpler reply.",
+                why_best_move_was_better="e4 keeps a slightly cleaner edge.",
+                practical_lesson="Compare your move to the most active central option.",
+                tactical_themes=[],
+                alternatives=[],
+            )
+
+        def build_played_move_result(self, explained):
+            return PlayedMoveResult(
+                move_uci="d2d4",
+                move_san="d4",
+                quality_label="inaccuracy",
+                quality_emoji="?!",
+                cp_loss=15,
+                tactics_after_played=[],
+                tactics_after_best=[],
+            )
+
+        def build_best_move_comparison(self, explained):
+            return BestMoveComparison(
+                best_move_uci="e2e4",
+                best_move_san="e4",
+                best_move_score_display="+0.35",
+                played_move_uci="d2d4",
+                played_move_san="d4",
+                played_move_quality="inaccuracy",
+                cp_loss=15,
+                why_best_move_is_better="e4 keeps the cleaner edge.",
+            )
+
+        def narrate_played_move_explanation(self, explained, structured) -> str:
+            return "You missed a cleaner move."
+
+    monkeypatch.setattr(
+        "chesscoach.pipeline._pick_explanation_provider",
+        lambda provider, model: ("openai", _Provider(), None),
+    )
+    monkeypatch.setattr("chesscoach.pipeline.Explainer", _Explainer)
+
+    explanation, warnings = run_explanation(
+        make_position(),
+        make_analysis_result(),
+        make_request(include_explanation=True, played_move_uci="d2d4"),
+    )
+
+    assert explanation.status == "success"
+    assert explanation.played_move_result is not None
+    assert explanation.comparison is not None
+    assert explanation.structured_explanation is not None
+    assert explanation.explanation_text == "You missed a cleaner move."
+    assert warnings == []
+
+
+def test_run_explanation_invalid_played_move_falls_back_to_best_move(
+    monkeypatch,
+) -> None:
+    class _Explainer:
+        def __init__(self, engine, provider, top_n) -> None:
+            self.provider = provider
+
+        def analyze_move(self, fen_before: str, move_uci: str):
+            raise ValueError(f"Illegal move {move_uci!r} in position {fen_before!r}")
+
+        def analyze_position(self, fen_before: str):
+            from chesscoach.explanation.models import ExplainedMove, MoveQuality
+
+            return ExplainedMove(
+                fen_before=fen_before,
+                move_played_san="e4",
+                move_played_uci="e2e4",
+                quality=MoveQuality(label="best", cp_loss=0, emoji=""),
+                best_move=make_analysis_result().top_moves[0],
+                alternatives=make_analysis_result().top_moves[1:],
+                tactics_after_played=[],
+                tactics_after_best=[],
+            )
+
+        def build_structured_explanation(self, explained):
+            return StructuredExplanation(
+                summary="e4 takes the center.",
+                what_the_move_does="It claims central space.",
+                what_it_threatens="It opens lines.",
+                why_it_is_best="It keeps the strongest evaluation.",
+                why_alternatives_are_worse="Alternatives are slightly slower.",
+                alternatives=[],
+                tactical_themes=[],
+            )
+
+    monkeypatch.setattr(
+        "chesscoach.pipeline._pick_explanation_provider",
+        lambda provider, model: (None, None, None),
+    )
+    monkeypatch.setattr("chesscoach.pipeline.Explainer", _Explainer)
+
+    explanation, warnings = run_explanation(
+        make_position(),
+        make_analysis_result(),
+        make_request(include_explanation=True, played_move_uci="e2e5"),
+    )
+
+    assert explanation.status == "success"
+    assert explanation.played_move_result is None
+    assert explanation.comparison is None
+    assert explanation.move_uci == "e2e4"
+    assert explanation.structured_explanation is not None
+    assert warnings[0].code == "played_move_illegal"
 
 
 def test_pipeline_json_includes_structured_explanation(monkeypatch) -> None:
@@ -389,6 +538,8 @@ def test_pipeline_json_includes_structured_explanation(monkeypatch) -> None:
                     alternatives=[],
                     tactical_themes=[],
                 ),
+                played_move_result=None,
+                comparison=None,
                 provider="openai",
                 status="success",
             ),
