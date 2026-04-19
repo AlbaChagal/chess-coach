@@ -6,6 +6,7 @@ import argparse
 import logging
 import os
 import sys
+from typing import TextIO
 
 DEFAULT_LOG_LEVEL = "INFO"
 LOG_LEVEL_ENV_VAR = "CHESSCOACH_LOG_LEVEL"
@@ -25,14 +26,14 @@ def add_logging_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def configure_logging(level: str) -> int:
+def configure_logging(level: str, stream: TextIO | None = None) -> int:
     """Configure root logging and return the resolved numeric level."""
     numeric_level = _parse_log_level(level)
     logging.basicConfig(
         level=numeric_level,
         format=_LOG_FORMAT,
         datefmt=_DATE_FORMAT,
-        stream=sys.stdout,
+        stream=stream or sys.stdout,
         force=True,
     )
     return numeric_level

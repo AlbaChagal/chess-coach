@@ -1,23 +1,98 @@
+"""CLI entry points for FEN analysis and image-based coaching."""
+
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+import sys
+from pathlib import Path
 
 from chesscoach.analysis.coach import ChessCoach
 from chesscoach.analysis.engine import ChessEngine
 from chesscoach.logging_utils import add_logging_args, configure_logging
+from chesscoach.pipeline import coaching_result_to_dict, run_coaching_pipeline
+from chesscoach.pipeline_models import CoachingRequest, ImageClick
 
 LOGGER = logging.getLogger(__name__)
 
 
 def main(argv: list[str] | None = None) -> None:
-    """CLI entry point for move suggestions."""
-    parser = argparse.ArgumentParser(description="Analyze a chess position from FEN.")
-    parser.add_argument("fen", nargs="*", help="FEN string to analyze.")
-    add_logging_args(parser)
-    args = parser.parse_args(argv)
-    configure_logging(args.log_level)
+    """CLI entry point for position analysis and image-based coaching."""
+    normalized_argv = _normalize_legacy_argv(argv or sys.argv[1:])
+    parser = _build_parser()
+    args = parser.parse_args(normalized_argv)
 
+    log_stream = sys.stderr if getattr(args, "json", False) else sys.stdout
+    configure_logging(args.log_level, stream=log_stream)
+
+    if args.command == "fen":
+        _run_fen_command(args)
+        return
+    if args.command == "image":
+        _run_image_command(args)
+        return
+    raise SystemExit(2)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="ChessCoach command line tools.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    fen_parser = subparsers.add_parser("fen", help="Analyze a position from FEN.")
+    fen_parser.add_argument("fen", nargs="*", help="FEN string to analyze.")
+    add_logging_args(fen_parser)
+
+    image_parser = subparsers.add_parser(
+        "image", help="Analyze a chessboard image end-to-end."
+    )
+    image_parser.add_argument("image", type=Path)
+    image_parser.add_argument(
+        "--side-to-move",
+        choices=["w", "b"],
+        default="w",
+        dest="side_to_move",
+        help="Side to move. Defaults to white.",
+    )
+    image_parser.add_argument(
+        "--white-king-start-click-x",
+        type=float,
+        required=True,
+        dest="white_king_start_click_x",
+    )
+    image_parser.add_argument(
+        "--white-king-start-click-y",
+        type=float,
+        required=True,
+        dest="white_king_start_click_y",
+    )
+    image_parser.add_argument(
+        "--castling-rights",
+        default=None,
+        dest="castling_rights",
+        help="Optional castling rights override (e.g. KQkq or -).",
+    )
+    image_parser.add_argument(
+        "--en-passant",
+        default=None,
+        dest="en_passant",
+        help="Optional en passant square override.",
+    )
+    image_parser.add_argument(
+        "--include-explanation",
+        action="store_true",
+        help="Attempt to explain the best engine move.",
+    )
+    image_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON to stdout.",
+    )
+    add_logging_args(image_parser)
+    return parser
+
+
+def _run_fen_command(args: argparse.Namespace) -> None:
     if args.fen:
         fen = " ".join(args.fen)
     else:
@@ -31,8 +106,68 @@ def main(argv: list[str] | None = None) -> None:
     except ValueError as exc:
         LOGGER.error(f"Invalid analysis request: {exc}")
         raise SystemExit(1) from exc
+    finally:
+        engine.close()
 
     LOGGER.info(f"{coach.format_suggestions(fen, moves)}")
+
+
+def _run_image_command(args: argparse.Namespace) -> None:
+    request = CoachingRequest(
+        image=args.image,
+        side_to_move=args.side_to_move,
+        white_king_start_click=ImageClick(
+            x=args.white_king_start_click_x,
+            y=args.white_king_start_click_y,
+        ),
+        castling_rights=args.castling_rights,
+        en_passant=args.en_passant,
+        include_explanation=args.include_explanation,
+    )
+    result = run_coaching_pipeline(request)
+
+    if args.json:
+        print(json.dumps(coaching_result_to_dict(result), indent=2))
+        return
+
+    _print_human_readable_result(result)
+    if result.status == "failed":
+        raise SystemExit(1)
+
+
+def _print_human_readable_result(result) -> None:
+    print(f"Status: {result.status}")
+    if result.user_action_required is not None:
+        print(f"User action required: {result.user_action_required}")
+
+    if result.vision.fen_placement is not None:
+        print(f"Piece placement: {result.vision.fen_placement}")
+    if result.vision.vision_confidence is not None:
+        print(f"Vision confidence: {result.vision.vision_confidence:.1f}")
+
+    if result.position is not None:
+        print(f"FEN: {result.position.fen}")
+
+    if result.analysis is not None:
+        print("Top moves:")
+        for index, move in enumerate(result.analysis.top_moves, start=1):
+            line = " ".join(move.continuation) if move.continuation else "-"
+            print(f"{index}. {move.move_san} [{move.score_display()}] line: {line}")
+
+    if result.explanation is not None and result.explanation.explanation_text:
+        print("Explanation:")
+        print(result.explanation.explanation_text)
+
+    for warning in result.warnings:
+        print(f"Warning [{warning.code}]: {warning.message}")
+
+
+def _normalize_legacy_argv(argv: list[str]) -> list[str]:
+    if not argv:
+        return ["fen"]
+    if argv[0] not in {"fen", "image"}:
+        return ["fen", *argv]
+    return argv
 
 
 if __name__ == "__main__":

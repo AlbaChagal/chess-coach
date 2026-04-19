@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import cast
 from unittest.mock import MagicMock, patch
 
 import chess
@@ -26,6 +27,7 @@ def make_coach(moves=None):
 # ---------------------------------------------------------------------------
 # parse_fen
 # ---------------------------------------------------------------------------
+
 
 def test_parse_fen_valid_starting_position():
     coach = make_coach()
@@ -56,11 +58,13 @@ def test_parse_fen_empty_raises():
 # analyze_position
 # ---------------------------------------------------------------------------
 
+
 def test_analyze_position_calls_engine():
     coach = make_coach()
     results = coach.analyze_position(STARTING_FEN, n=3)
     assert results == SAMPLE_MOVES
-    coach._engine.get_best_moves.assert_called_once()
+    engine = cast(MagicMock, coach._engine)
+    assert engine.get_best_moves.call_count == 1
 
 
 def test_analyze_position_invalid_fen_raises():
@@ -72,6 +76,7 @@ def test_analyze_position_invalid_fen_raises():
 # ---------------------------------------------------------------------------
 # format_suggestions
 # ---------------------------------------------------------------------------
+
 
 def test_format_suggestions_contains_moves():
     coach = make_coach()
@@ -113,10 +118,15 @@ def test_format_suggestions_mate_score():
 # CLI smoke test
 # ---------------------------------------------------------------------------
 
+
 def test_cli_main_prints_output(capsys):
-    with patch("chesscoach.analysis.coach.ChessCoach.analyze_position", return_value=SAMPLE_MOVES):
-        with patch("sys.argv", ["chess-coach", STARTING_FEN]):
+    with patch(
+        "chesscoach.analysis.coach.ChessCoach.analyze_position",
+        return_value=SAMPLE_MOVES,
+    ):
+        with patch("sys.argv", ["chess-coach", "fen", STARTING_FEN]):
             from chesscoach.cli import main
+
             main()
 
     captured = capsys.readouterr()
@@ -125,8 +135,9 @@ def test_cli_main_prints_output(capsys):
 
 
 def test_cli_main_invalid_fen_exits(capsys):
-    with patch("sys.argv", ["chess-coach", "invalid_fen"]):
+    with patch("sys.argv", ["chess-coach", "fen", "invalid_fen"]):
         from chesscoach.cli import main
+
         with pytest.raises(SystemExit) as exc_info:
             main()
     assert exc_info.value.code == 1
