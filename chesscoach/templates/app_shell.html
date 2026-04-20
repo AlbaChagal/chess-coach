@@ -35,6 +35,50 @@
         <span class="step-pill" data-step-pill="analysis">5. Analysis</span>
       </div>
 
+      <section class="board-panel analysis-preview-panel">
+        <div class="analysis-header">
+          <div>
+            <h2>Analysis</h2>
+            <p class="screen-subheading">
+              Board preview updates from the starting position to the detected
+              position as you move through the funnel.
+            </p>
+          </div>
+        </div>
+        <div class="analysis-board-shell" data-analysis-board-shell>
+          <div class="analysis-board" data-analysis-board></div>
+          <svg class="analysis-arrow-layer" data-analysis-arrow-layer hidden>
+            <defs>
+              <marker
+                id="analysis-arrow-head"
+                markerWidth="10"
+                markerHeight="10"
+                refX="8"
+                refY="5"
+                orient="auto"
+              >
+                <polygon points="0 0, 10 5, 0 10"></polygon>
+              </marker>
+            </defs>
+            <line data-analysis-arrow hidden></line>
+          </svg>
+        </div>
+        <div class="analysis-playback">
+          <button class="secondary-link" data-analysis-prev-button>
+            Previous
+          </button>
+          <button class="secondary-link" data-analysis-reset-button>
+            Reset
+          </button>
+          <button class="secondary-link" data-analysis-next-button>
+            Next
+          </button>
+        </div>
+        <p class="selection-note" data-analysis-step-note>
+          Step 0 of 0
+        </p>
+      </section>
+
       <section class="analyze-step" data-step="upload">
         <div class="placeholder-block">
           <div class="placeholder-illustration upload-stage"></div>
@@ -188,25 +232,16 @@
       </section>
 
       <section class="analyze-step" data-step="analysis" hidden>
-        <div class="analysis-header">
-          <div>
-            <h2>Analysis</h2>
-            <p class="screen-subheading">
-              Review the top engine lines and step through the suggested
-              continuations.
-            </p>
-          </div>
-          <div class="analysis-header-actions">
-            <button class="secondary-link" data-save-button>
-              Save Position
-            </button>
-            <button class="secondary-link" data-delete-saved-button hidden>
-              Delete Saved Position
-            </button>
-            <button class="secondary-link" data-analysis-flip-button>
-              Flip Board
-            </button>
-          </div>
+        <div class="analysis-header-actions">
+          <button class="secondary-link" data-save-button>
+            Save Position
+          </button>
+          <button class="secondary-link" data-delete-saved-button hidden>
+            Delete Saved Position
+          </button>
+          <button class="secondary-link" data-analysis-flip-button>
+            Flip Board
+          </button>
         </div>
 
         <div class="analysis-loading" data-analysis-loading hidden>
@@ -217,41 +252,6 @@
         <p class="save-feedback" data-save-feedback hidden></p>
 
         <div class="analysis-layout" data-analysis-layout hidden>
-          <div class="board-panel">
-            <div class="analysis-board-shell" data-analysis-board-shell>
-              <div class="analysis-board" data-analysis-board></div>
-              <svg class="analysis-arrow-layer" data-analysis-arrow-layer hidden>
-                <defs>
-                  <marker
-                    id="analysis-arrow-head"
-                    markerWidth="10"
-                    markerHeight="10"
-                    refX="8"
-                    refY="5"
-                    orient="auto"
-                  >
-                    <polygon points="0 0, 10 5, 0 10"></polygon>
-                  </marker>
-                </defs>
-                <line data-analysis-arrow hidden></line>
-              </svg>
-            </div>
-            <div class="analysis-playback">
-              <button class="secondary-link" data-analysis-prev-button>
-                Previous
-              </button>
-              <button class="secondary-link" data-analysis-reset-button>
-                Reset
-              </button>
-              <button class="secondary-link" data-analysis-next-button>
-                Next
-              </button>
-            </div>
-            <p class="selection-note" data-analysis-step-note>
-              Step 0 of 0
-            </p>
-          </div>
-
           <div class="analysis-lines">
             <div class="analysis-lines-header">
               <h3>Top Lines</h3>

@@ -183,7 +183,10 @@ def prepare_detection_dataset(input_dir: Path, output_dir: Path) -> Path:
                 annotations = _build_annotations(payload)
                 if not annotations:
                     continue
-                ordered_corners = select_metadata_corners(payload)
+                ordered_corners: np.ndarray | None = None
+                raw_corners = payload.get("corners")
+                if isinstance(raw_corners, list) and len(raw_corners) == 4:
+                    ordered_corners = select_metadata_corners(payload)
                 copied_path = split_output_dir / image_path.name
                 shutil.copy2(image_path, copied_path)
                 record = {
@@ -191,7 +194,9 @@ def prepare_detection_dataset(input_dir: Path, output_dir: Path) -> Path:
                     "split": split,
                     "width": payload.get("width"),
                     "height": payload.get("height"),
-                    "board_corners": ordered_corners.tolist(),
+                    "board_corners": (
+                        ordered_corners.tolist() if ordered_corners is not None else None
+                    ),
                     "annotations": annotations,
                 }
                 manifest_file.write(json.dumps(record) + "\n")

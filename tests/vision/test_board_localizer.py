@@ -10,6 +10,7 @@ from chesscoach.vision.board_localizer import denormalize_corners, normalize_cor
 from chesscoach.vision.board_localizer_dataset import (
     BoardLocalizationDataset,
     _apply_perspective_jitter,
+    _apply_translation_jitter,
 )
 from scripts.train_board_localizer import _load_sample_weights
 
@@ -39,6 +40,43 @@ def test_perspective_jitter_can_leave_sample_unchanged(monkeypatch) -> None:
 
     np.testing.assert_array_equal(warped_image, image)
     np.testing.assert_allclose(warped_corners, corners)
+
+
+def test_translation_jitter_can_leave_sample_unchanged(monkeypatch) -> None:
+    image = np.full((40, 60, 3), 127, dtype=np.uint8)
+    corners = np.array(
+        [[5.0, 6.0], [55.0, 6.0], [55.0, 34.0], [5.0, 34.0]],
+        dtype=np.float32,
+    )
+
+    monkeypatch.setattr(random, "random", lambda: 1.0)
+
+    translated_image, translated_corners = _apply_translation_jitter(image, corners)
+
+    np.testing.assert_array_equal(translated_image, image)
+    np.testing.assert_allclose(translated_corners, corners)
+
+
+def test_translation_jitter_remaps_corners(monkeypatch) -> None:
+    image = np.full((40, 60, 3), 127, dtype=np.uint8)
+    corners = np.array(
+        [[5.0, 6.0], [55.0, 6.0], [55.0, 34.0], [5.0, 34.0]],
+        dtype=np.float32,
+    )
+
+    monkeypatch.setattr(random, "random", lambda: 0.0)
+    randint_values = iter([10, 0, 4, 0, 3, 2])
+    monkeypatch.setattr(random, "randint", lambda low, high: next(randint_values))
+
+    translated_image, translated_corners = _apply_translation_jitter(image, corners)
+
+    assert translated_image.shape == image.shape
+    expected = corners.copy()
+    expected[:, 0] += 7.0
+    expected[:, 1] += 2.0
+    expected[:, 0] = np.clip(expected[:, 0], 0.0, image.shape[1] - 1.0)
+    expected[:, 1] = np.clip(expected[:, 1], 0.0, image.shape[0] - 1.0)
+    np.testing.assert_allclose(translated_corners, expected)
 
 
 def test_load_sample_weights_matches_dataset_ids(tmp_path: Path) -> None:

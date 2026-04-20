@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from io import BytesIO
 
 import cv2
 import numpy as np
@@ -32,6 +33,15 @@ def _board_to_bytes(board: np.ndarray) -> bytes:
 def _board_to_pil(board: np.ndarray) -> PILImage.Image:
     rgb = cv2.cvtColor(board, cv2.COLOR_BGR2RGB)
     return PILImage.fromarray(rgb)
+
+
+def _oriented_jpeg_bytes(width: int, height: int, orientation: int) -> bytes:
+    image = PILImage.new("RGB", (width, height), color=(255, 0, 0))
+    exif = PILImage.Exif()
+    exif[274] = orientation
+    buffer = BytesIO()
+    image.save(buffer, format="JPEG", exif=exif)
+    return buffer.getvalue()
 
 
 @pytest.fixture()
@@ -128,6 +138,39 @@ def test_predict_fen_uses_default_board_localizer_when_available(
     assert len(localizer_calls) == 1
 
 
+def test_get_default_detector_uses_default_checkpoint_when_present(
+    monkeypatch,
+) -> None:
+    from chesscoach.vision import predictor as predictor_module
+
+    created: dict[str, object] = {}
+
+    class _Detector:
+        pass
+
+    class _Checkpoint:
+        def exists(self) -> bool:
+            return True
+
+    monkeypatch.setattr(predictor_module, "_default_detector", None)
+    monkeypatch.setattr(
+        predictor_module,
+        "_DEFAULT_DETECTOR_CHECKPOINT",
+        _Checkpoint(),
+    )
+
+    def _piece_detector(checkpoint=None):
+        created["checkpoint"] = checkpoint
+        return _Detector()
+
+    monkeypatch.setattr(predictor_module, "PieceDetector", _piece_detector)
+
+    detector = predictor_module._get_default_detector()
+
+    assert isinstance(detector, _Detector)
+    assert created["checkpoint"] == predictor_module._DEFAULT_DETECTOR_CHECKPOINT
+
+
 @pytest.mark.parametrize("rotation_shift", [0, 1, 2, 3])
 def test_orients_board_corners_from_white_king_click(rotation_shift: int) -> None:
     from chesscoach.vision import predictor as predictor_module
@@ -174,6 +217,16 @@ def test_blank_image_raises_board_not_found(stub: PieceClassifier) -> None:
     blank_bytes = _board_to_bytes(blank)
     with pytest.raises(BoardNotFoundError):
         predict_fen(blank_bytes, stub)
+
+
+def test_to_bgr_applies_exif_orientation_for_bytes() -> None:
+    from chesscoach.vision.predictor import _to_bgr
+
+    oriented = _oriented_jpeg_bytes(width=40, height=20, orientation=6)
+
+    bgr = _to_bgr(oriented)
+
+    assert bgr.shape[:2] == (40, 20)
 
 
 # --- BoardVision wrapper ---

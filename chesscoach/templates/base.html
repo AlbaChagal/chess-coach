@@ -7,17 +7,11 @@
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     >
     <title>{{ page_title }} | ChessCoach</title>
-    <link
-      rel="stylesheet"
-      href="https://cdnjs.cloudflare.com/ajax/libs/chessboard.js/1.0.0/chessboard-1.0.0.min.css"
-    >
-    <link rel="stylesheet" href="/static/app.css">
+    <link rel="stylesheet" href="/static/app.css?v={{ static_asset_version }}">
   </head>
   <body class="{% block body_class %}page{% endblock %}">
     {% block content %}{% endblock %}
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.13.4/chess.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/chessboard.js/1.0.0/chessboard-1.0.0.min.js"></script>
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v={{ static_asset_version }}"></script>
     {% block scripts %}{% endblock %}
   </body>
 </html>

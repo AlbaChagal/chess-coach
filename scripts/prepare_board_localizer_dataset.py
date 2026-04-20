@@ -53,6 +53,9 @@ def prepare_board_localizer_dataset(input_dir: Path, output_dir: Path) -> Path:
                 if not json_path.exists():
                     continue
                 payload = _load_json_payload(image_path)
+                raw_corners = payload.get("corners")
+                if not isinstance(raw_corners, list) or len(raw_corners) != 4:
+                    continue
                 ordered_corners = select_metadata_corners(payload)
                 record = {
                     "image_path": str(image_path.resolve()),

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import base64
 import binascii
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Literal, cast
 
 import chess
 import cv2
 import numpy as np
+from PIL import Image as PILImage
+from PIL import ImageOps
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -28,6 +31,7 @@ from chesscoach.auth import (
     encode_session_cookie,
 )
 from chesscoach.pipeline import (
+    INVALID_BOARD_POSITION_WARNING,
     complete_position,
     coaching_result_to_dict,
     run_analysis,
@@ -148,6 +152,7 @@ def create_app() -> FastAPI:
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     app.state.auth_store = _initialize_auth_store()
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+    static_asset_version = _static_asset_version()
 
     @app.get("/", response_class=HTMLResponse)
     def root(request: Request) -> RedirectResponse:
@@ -181,6 +186,7 @@ def create_app() -> FastAPI:
                 "switch_href": "/signup",
                 "switch_label": "Create account",
                 "show_confirm_password": False,
+                "static_asset_version": static_asset_version,
             },
         )
 
@@ -203,6 +209,7 @@ def create_app() -> FastAPI:
                 "switch_href": "/login",
                 "switch_label": "Log in instead",
                 "show_confirm_password": True,
+                "static_asset_version": static_asset_version,
             },
         )
 
@@ -291,6 +298,7 @@ def create_app() -> FastAPI:
                 subheading="Load a board image, review analysis, and save synced snapshots.",
                 user=user,
                 body_variant="analyze",
+                static_asset_version=static_asset_version,
             ),
         )
 
@@ -310,6 +318,7 @@ def create_app() -> FastAPI:
                 subheading="Open and manage your synced analysis snapshots.",
                 user=user,
                 body_variant="saved",
+                static_asset_version=static_asset_version,
             ),
         )
 
@@ -329,6 +338,7 @@ def create_app() -> FastAPI:
                 subheading="Manage your account and app display preferences.",
                 user=user,
                 body_variant="profile",
+                static_asset_version=static_asset_version,
             ),
         )
 
@@ -491,8 +501,15 @@ def create_app() -> FastAPI:
             }
         try:
             position = complete_position(vision_result, request)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ValueError:
+            return {
+                "status": "failed",
+                "position": None,
+                "user_action_required": None,
+                "warnings": serialize_pipeline_value(
+                    [INVALID_BOARD_POSITION_WARNING]
+                ),
+            }
         return {
             "status": "success" if position is not None else "failed",
             "position": serialize_pipeline_value(position),
@@ -605,6 +622,7 @@ def _shell_context(
     subheading: str,
     user: UserRecord,
     body_variant: str,
+    static_asset_version: str,
 ) -> dict[str, Any]:
     return {
         "page_title": page_title,
@@ -613,7 +631,18 @@ def _shell_context(
         "subheading": subheading,
         "user": user,
         "body_variant": body_variant,
+        "static_asset_version": static_asset_version,
     }
+
+
+def _static_asset_version() -> str:
+    """Return a stable cache-busting version for browser UI assets."""
+    asset_paths = [
+        STATIC_DIR / "app.css",
+        STATIC_DIR / "app.js",
+    ]
+    latest_mtime_ns = max(path.stat().st_mtime_ns for path in asset_paths)
+    return str(latest_mtime_ns)
 
 
 def _serialize_user_settings(settings: UserSettingsRecord) -> dict[str, object]:
@@ -655,10 +684,13 @@ def _decode_image_base64(image_base64: str) -> bytes:
 def _decode_image_base64_to_bgr(image_base64: str) -> np.ndarray:
     """Decode a base64 image into an OpenCV BGR array."""
     image_bytes = _decode_image_base64(image_base64)
-    array = np.frombuffer(image_bytes, dtype=np.uint8)
-    bgr = cv2.imdecode(array, cv2.IMREAD_COLOR)
-    if bgr is None:
+    try:
+        with PILImage.open(BytesIO(image_bytes)) as image:
+            normalized = ImageOps.exif_transpose(image).convert("RGB")
+    except (OSError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid image_base64 payload.")
+    rgb = np.array(normalized)
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
     return bgr
 
 

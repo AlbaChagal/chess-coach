@@ -321,6 +321,53 @@ p {
 
 .analysis-board {
   width: 100%;
+  aspect-ratio: 1 / 1;
+  min-height: 280px;
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-rows: repeat(8, minmax(0, 1fr));
+  border: 1px solid rgba(21, 51, 89, 0.18);
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+.analysis-square {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+}
+
+.analysis-square.light {
+  background: #f2d8b2;
+}
+
+.analysis-square.dark {
+  background: #a36d47;
+}
+
+.piece-glyph {
+  font-size: clamp(1.4rem, 4vw, 2.3rem);
+  line-height: 1;
+  user-select: none;
+}
+
+.coord-label {
+  position: absolute;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: rgba(21, 51, 89, 0.78);
+}
+
+.file-label {
+  right: 5px;
+  bottom: 3px;
+}
+
+.rank-label {
+  left: 5px;
+  top: 3px;
 }
 
 .analysis-arrow-layer {
@@ -510,6 +557,7 @@ p {
 .image-stage {
   position: relative;
   transform-origin: center;
+  cursor: crosshair;
 }
 
 .image-stage.flipped {

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+from io import BytesIO
 from pathlib import Path
 from typing import Protocol, TypeGuard, cast
 
 import cv2
 import numpy as np
 from PIL import Image as PILImage
+from PIL import ImageOps
 
 from chesscoach.vision.board_detector import (
     BOARD_SIZE,
@@ -33,6 +35,7 @@ from chesscoach.vision.types import PieceLabel, SquareGrid
 _default_detector: PieceDetector | None = None
 _default_board_localizer: BoardCornerLocalizer | None = None
 _default_board_localizer_initialized = False
+_DEFAULT_DETECTOR_CHECKPOINT = Path("models/piece_detector.pt")
 _DEFAULT_BOARD_LOCALIZER_CHECKPOINT = Path("models/board_localizer.pt")
 LOGGER = logging.getLogger(__name__)
 
@@ -52,8 +55,18 @@ class _DetectorClassifier(Protocol):
 def _get_default_detector() -> PieceDetector:
     global _default_detector
     if _default_detector is None:
-        LOGGER.info("Initializing default piece detector")
-        _default_detector = PieceDetector()
+        if _DEFAULT_DETECTOR_CHECKPOINT.exists():
+            LOGGER.info(
+                f"Initializing default piece detector from "
+                f"{_DEFAULT_DETECTOR_CHECKPOINT}"
+            )
+            _default_detector = PieceDetector(_DEFAULT_DETECTOR_CHECKPOINT)
+        else:
+            LOGGER.info(
+                f"No default piece detector checkpoint found at "
+                f"{_DEFAULT_DETECTOR_CHECKPOINT}; falling back to stub detector."
+            )
+            _default_detector = PieceDetector()
     return _default_detector
 
 
@@ -86,22 +99,29 @@ def _to_bgr(image: bytes | Path | PILImage.Image) -> np.ndarray:
     """Convert any supported input type to a BGR numpy array."""
     if isinstance(image, (bytes, bytearray)):
         LOGGER.debug("Decoding board image from raw bytes")
-        arr = np.frombuffer(image, dtype=np.uint8)
-        bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if bgr is None:
-            raise ValueError("Could not decode image bytes.")
-        return bgr
+        try:
+            with PILImage.open(BytesIO(image)) as pil_image:
+                return _pil_to_bgr(pil_image)
+        except (OSError, ValueError) as exc:
+            raise ValueError("Could not decode image bytes.") from exc
 
     if isinstance(image, Path):
         LOGGER.debug(f"Loading board image from path: {image}")
-        bgr = cv2.imread(str(image))
-        if bgr is None:
-            raise ValueError(f"Could not read image file: {image}")
-        return bgr
+        try:
+            with PILImage.open(image) as pil_image:
+                return _pil_to_bgr(pil_image)
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"Could not read image file: {image}") from exc
 
     # PIL.Image
     LOGGER.debug("Converting board image from PIL.Image")
-    rgb = np.array(image.convert("RGB"))
+    return _pil_to_bgr(image)
+
+
+def _pil_to_bgr(image: PILImage.Image) -> np.ndarray:
+    """Convert a PIL image to BGR, applying EXIF orientation first."""
+    normalized = ImageOps.exif_transpose(image).convert("RGB")
+    rgb = np.array(normalized)
     return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
 

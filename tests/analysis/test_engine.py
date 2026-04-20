@@ -96,6 +96,7 @@ def test_get_best_moves_san_notation(mock_popen):
     assert results[0].move_san == "e4"
     assert results[0].move_uci == "e2e4"
     assert results[0].continuation == ["e5", "Nf3"]
+    assert results[0].continuation_uci == ["e7e5", "g1f3"]
 
 
 @patch("chess.engine.SimpleEngine.popen_uci")

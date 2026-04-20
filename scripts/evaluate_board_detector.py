@@ -82,6 +82,12 @@ def _iter_split_images(split_dir: Path) -> list[Path]:
     return sorted(image_paths)
 
 
+def _has_usable_board_corners(payload: dict[str, Any]) -> bool:
+    """Return whether a payload has explicit board-corner annotations."""
+    raw_corners = payload.get("corners")
+    return isinstance(raw_corners, list) and len(raw_corners) == 4
+
+
 def _evaluate_image(
     image_path: Path,
     *,
@@ -185,6 +191,7 @@ def _log_summary(
     *,
     split: str,
     bad_geometry_threshold_px: float,
+    skipped_missing_corners: int = 0,
 ) -> None:
     total = len(diagnostics)
     board_not_found = sum(1 for item in diagnostics if item.status == "board_not_found")
@@ -208,6 +215,10 @@ def _log_summary(
         f"bad_geometry={bad_geometry} good_geometry={good_geometry} "
         f"bad_geometry_threshold_px={bad_geometry_threshold_px:.1f}"
     )
+    if skipped_missing_corners:
+        LOGGER.info(
+            f"Skipped images without board-corner annotations: {skipped_missing_corners}"
+        )
     if detected == 0:
         LOGGER.info("No boards were detected successfully.")
         return
@@ -250,18 +261,27 @@ def evaluate_board_detector(
     if not split_dir.exists():
         raise FileNotFoundError(f"Split directory not found: {split_dir}")
 
-    diagnostics = [
-        _evaluate_image(
-            image_path,
-            bad_geometry_threshold_px=bad_geometry_threshold_px,
+    diagnostics: list[BoardCornerDiagnostic] = []
+    skipped_missing_corners = 0
+    for image_path in _iter_split_images(split_dir):
+        json_path = image_path.with_suffix(".json")
+        if not json_path.exists():
+            continue
+        payload = _load_json_payload(image_path)
+        if not _has_usable_board_corners(payload):
+            skipped_missing_corners += 1
+            continue
+        diagnostics.append(
+            _evaluate_image(
+                image_path,
+                bad_geometry_threshold_px=bad_geometry_threshold_px,
+            )
         )
-        for image_path in _iter_split_images(split_dir)
-        if image_path.with_suffix(".json").exists()
-    ]
     _log_summary(
         diagnostics,
         split=split,
         bad_geometry_threshold_px=bad_geometry_threshold_px,
+        skipped_missing_corners=skipped_missing_corners,
     )
 
     if overlay_output_dir is not None and overlay_limit > 0:

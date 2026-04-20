@@ -10,6 +10,7 @@ from chesscoach.explanation.models import (
     StructuredPlayedMoveExplanation,
 )
 from chesscoach.pipeline import (
+    INVALID_BOARD_POSITION_WARNING,
     LOW_CONFIDENCE_WARNING,
     coaching_result_to_dict,
     complete_position,
@@ -159,6 +160,22 @@ def test_complete_position_uses_explicit_castling_rights() -> None:
     assert position is not None
     assert position.castling_rights == "-"
     assert position.source == "user"
+
+
+def test_pipeline_invalid_board_position_returns_structured_failure(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "chesscoach.pipeline.predict_fen",
+        lambda image, **kwargs: "P7/1p6/1bp5/2kp4/8/8/8/6rP",
+    )
+
+    result = run_coaching_pipeline(make_request())
+
+    assert result.status == "failed"
+    assert result.position is None
+    assert result.analysis is None
+    assert result.warnings[-1] == INVALID_BOARD_POSITION_WARNING
 
 
 def test_coaching_result_to_dict_includes_score_display(monkeypatch) -> None:

@@ -73,6 +73,31 @@ def test_prepare_detection_dataset_writes_manifest_and_images(tmp_path: Path) ->
     assert (tmp_path / "prepared" / records[0]["image_path"]).exists()
 
 
+def test_prepare_detection_dataset_keeps_samples_without_board_corners(
+    tmp_path: Path,
+) -> None:
+    raw_train = tmp_path / "raw" / "train"
+    raw_train.mkdir(parents=True)
+    image_path = raw_train / "board.jpg"
+    cv2.imwrite(str(image_path), np.full((128, 128, 3), 200, dtype=np.uint8))
+    image_path.with_suffix(".json").write_text(
+        json.dumps(
+            {
+                "pieces": [
+                    {"piece": "q", "square": "a8", "box": [20, 20, 20, 20]},
+                    {"piece": "Q", "square": "h1", "box": [88, 88, 20, 20]},
+                ],
+            }
+        )
+    )
+
+    manifest_path = prepare_detection_dataset(tmp_path / "raw", tmp_path / "prepared")
+
+    records = [json.loads(line) for line in manifest_path.read_text().splitlines()]
+    assert len(records) == 1
+    assert records[0]["board_corners"] is None
+
+
 def test_detection_dataset_loads_tensor_targets(tmp_path: Path) -> None:
     prepared_dir = tmp_path / "prepared"
     image_dir = prepared_dir / "images" / "train"

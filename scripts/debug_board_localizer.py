@@ -17,6 +17,7 @@ if str(_REPO_ROOT) not in sys.path:  # pragma: no cover - import path fallback
     sys.path.append(str(_REPO_ROOT))
 
 from chesscoach.logging_utils import add_logging_args, configure_logging  # noqa: E402
+from chesscoach.vision.board_detector import warp_board_from_corners  # noqa: E402
 from chesscoach.vision.board_localizer import (  # noqa: E402
     BoardCornerLocalizer,
     DEFAULT_BOARD_LOCALIZER_IMAGE_SIZE,
@@ -48,6 +49,67 @@ def _draw_polygon(
 ) -> None:
     points = corners.astype(np.int32).reshape(-1, 1, 2)
     cv2.polylines(image, [points], isClosed=True, color=color, thickness=2)
+
+
+def _fit_width(image: np.ndarray, width: int) -> np.ndarray:
+    """Resize an image to a target width while preserving aspect ratio."""
+    current_height, current_width = image.shape[:2]
+    if current_width == width:
+        return image
+    scale = width / current_width
+    resized_height = max(1, int(round(current_height * scale)))
+    return cv2.resize(image, (width, resized_height))
+
+
+def _stack_debug_panel(
+    *,
+    raw_overlay: np.ndarray,
+    expected_warp: np.ndarray,
+    predicted_warp: np.ndarray,
+    mean_error: float,
+    max_error: float,
+) -> np.ndarray:
+    """Build a side-by-side panel with overlay and both board warps."""
+    left = _fit_width(raw_overlay, 900)
+    middle = _fit_width(expected_warp, 900)
+    right = _fit_width(predicted_warp, 900)
+    panel_height = max(left.shape[0], middle.shape[0], right.shape[0]) + 90
+    panel_width = left.shape[1] + middle.shape[1] + right.shape[1]
+    panel = np.full((panel_height, panel_width, 3), 18, dtype=np.uint8)
+
+    x_offset = 0
+    for image in (left, middle, right):
+        panel[: image.shape[0], x_offset : x_offset + image.shape[1]] = image
+        x_offset += image.shape[1]
+
+    labels = [
+        ("raw image + expected/predicted corners", 20),
+        ("warp from expected corners", left.shape[1] + 20),
+        ("warp from predicted corners", left.shape[1] + middle.shape[1] + 20),
+    ]
+    text_y = panel_height - 46
+    for label, x in labels:
+        cv2.putText(
+            panel,
+            label,
+            (x, text_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (220, 220, 220),
+            2,
+            cv2.LINE_AA,
+        )
+    cv2.putText(
+        panel,
+        f"mean_error_px={mean_error:.2f} max_error_px={max_error:.2f}",
+        (20, panel_height - 16),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA,
+    )
+    return panel
 
 
 def _iter_records(
@@ -117,19 +179,18 @@ def debug_board_localizer(
         overlay = image.copy()
         _draw_polygon(overlay, expected, color=(255, 255, 0))
         _draw_polygon(overlay, predicted, color=(255, 0, 255))
-        cv2.putText(
-            overlay,
-            f"mean_error_px={mean_error:.2f} max_error_px={max_error:.2f}",
-            (12, 24),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.65,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA,
+        expected_warp = warp_board_from_corners(image, expected)
+        predicted_warp = warp_board_from_corners(image, predicted)
+        panel = _stack_debug_panel(
+            raw_overlay=overlay,
+            expected_warp=expected_warp,
+            predicted_warp=predicted_warp,
+            mean_error=mean_error,
+            max_error=max_error,
         )
 
         output_path = output_dir / image_path.name
-        cv2.imwrite(str(output_path), overlay)
+        cv2.imwrite(str(output_path), panel)
         (output_dir / f"{image_path.stem}.txt").write_text(
             "\n".join(
                 [

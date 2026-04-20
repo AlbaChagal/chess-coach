@@ -20,9 +20,33 @@ from chesscoach.vision.board_localizer import (
 )
 from chesscoach.vision.board_localizer_dataset import BoardLocalizationDataset
 
+try:
+    from scripts.prepare_board_localizer_dataset import prepare_board_localizer_dataset
+except ModuleNotFoundError:  # pragma: no cover - direct script execution fallback
+    import sys
+
+    sys.path.append(str(Path(__file__).resolve().parent.parent))
+    from scripts.prepare_board_localizer_dataset import prepare_board_localizer_dataset
+
 LOGGER = logging.getLogger(__name__)
 _TRAIN_LOG_EVERY = 10
 _DEFAULT_PATIENCE = 5
+
+
+def _resolve_manifest_path(
+    *,
+    manifest_path: Path | None,
+    raw_input: Path | None,
+    prepared_output: Path | None,
+) -> Path:
+    """Return the board-localizer manifest path, preparing it if needed."""
+    if manifest_path is not None:
+        return manifest_path
+    if raw_input is None:
+        raise ValueError("Either manifest_path or raw_input must be provided.")
+
+    output_dir = prepared_output or Path("data/chess_boards/board_localizer")
+    return prepare_board_localizer_dataset(raw_input, output_dir)
 
 
 def _pixel_corner_error(
@@ -120,9 +144,11 @@ def _load_sample_weights(
 
 
 def train_board_localizer(
-    manifest_path: Path,
+    manifest_path: Path | None,
     output_path: Path,
     *,
+    raw_input: Path | None,
+    prepared_output: Path | None,
     epochs: int,
     batch_size: int,
     learning_rate: float,
@@ -131,15 +157,20 @@ def train_board_localizer(
     hard_example_weights: Path | None,
 ) -> None:
     """Train a board-corner localizer on the prepared raw-image manifest."""
+    resolved_manifest_path = _resolve_manifest_path(
+        manifest_path=manifest_path,
+        raw_input=raw_input,
+        prepared_output=prepared_output,
+    )
     device = select_board_localizer_device()
     train_ds = BoardLocalizationDataset(
-        manifest_path,
+        resolved_manifest_path,
         split="train",
         image_size=image_size,
         augment=True,
     )
     val_ds = BoardLocalizationDataset(
-        manifest_path,
+        resolved_manifest_path,
         split="val",
         image_size=image_size,
     )
@@ -167,7 +198,7 @@ def train_board_localizer(
         num_workers=2,
     )
     LOGGER.info(
-        f"Training board localizer manifest={manifest_path} output={output_path} "
+        f"Training board localizer manifest={resolved_manifest_path} output={output_path} "
         f"device={device} train_samples={len(train_ds)} val_samples={len(val_ds)} "
         f"image_size={image_size} batch_size={batch_size}"
     )
@@ -188,7 +219,7 @@ def train_board_localizer(
     epochs_without_improvement = 0
 
     params = {
-        "dataset_manifest": str(manifest_path),
+        "dataset_manifest": str(resolved_manifest_path),
         "epochs": epochs,
         "batch_size": batch_size,
         "learning_rate": learning_rate,
@@ -269,7 +300,21 @@ def main(argv: list[str] | None = None) -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(description="Train the board localizer.")
     add_logging_args(parser)
-    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path, default=None)
+    parser.add_argument(
+        "--raw-input",
+        type=Path,
+        default=None,
+        dest="raw_input",
+        help="Optional raw split directory to prepare into a board-localizer manifest.",
+    )
+    parser.add_argument(
+        "--prepared-output",
+        type=Path,
+        default=None,
+        dest="prepared_output",
+        help="Optional output directory for manifests prepared from raw input.",
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -297,6 +342,8 @@ def main(argv: list[str] | None = None) -> None:
     train_board_localizer(
         args.manifest,
         args.output,
+        raw_input=args.raw_input,
+        prepared_output=args.prepared_output,
         epochs=args.epochs,
         batch_size=args.batch_size,
         learning_rate=args.lr,

@@ -37,11 +37,14 @@ class ChessEngine:
             LOGGER.debug(f"Opening engine on demand at {self._engine_path}")
             self._engine = chess.engine.SimpleEngine.popen_uci(self._engine_path)
         try:
+            engine = self._engine
+            if engine is None:
+                raise RuntimeError("Chess engine failed to initialize.")
             LOGGER.info(
                 f"Requesting engine analysis depth={self._depth} multipv={n} "
                 f"fen={board.fen()}"
             )
-            infos = self._engine.analyse(
+            infos = engine.analyse(
                 board,
                 chess.engine.Limit(depth=self._depth),
                 multipv=n,
@@ -62,7 +65,10 @@ class ChessEngine:
         move_san = board.san(first_move) if first_move else "?"
         move_uci = first_move.uci() if first_move else "?"
 
-        pov_score = info["score"].relative
+        score = info.get("score")
+        if score is None:
+            raise ValueError("Engine analysis did not include a score.")
+        pov_score = score.relative
         if pov_score.is_mate():
             score_cp = None
             score_mate = pov_score.mate()
@@ -71,7 +77,7 @@ class ChessEngine:
             score_mate = None
 
         depth: int = info.get("depth", 0)
-        continuation = self._extract_continuation(board, pv)
+        continuation, continuation_uci = self._extract_continuation(board, pv)
         LOGGER.debug(
             f"Converted engine info to analysis move={move_uci} depth={depth} "
             f"score_cp={score_cp} score_mate={score_mate}"
@@ -84,12 +90,13 @@ class ChessEngine:
             score_mate=score_mate,
             depth=depth,
             continuation=continuation,
+            continuation_uci=continuation_uci,
         )
 
     @staticmethod
     def _extract_continuation(
         board: chess.Board, pv: list[chess.Move]
-    ) -> list[str]:
+    ) -> tuple[list[str], list[str]]:
         # Skip the first move (it's the suggestion itself); show the next N
         remaining = pv[1: 1 + CONTINUATION_MOVES]
         tmp = board.copy()
@@ -97,7 +104,9 @@ class ChessEngine:
         if pv:
             tmp.push(pv[0])
         sans: list[str] = []
+        ucis: list[str] = []
         for move in remaining:
             sans.append(tmp.san(move))
+            ucis.append(move.uci())
             tmp.push(move)
-        return sans
+        return sans, ucis

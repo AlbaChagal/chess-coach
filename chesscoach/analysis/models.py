@@ -9,6 +9,7 @@ class MoveAnalysis:
     score_mate: int | None
     depth: int
     continuation: list[str] = field(default_factory=list)
+    continuation_uci: list[str] = field(default_factory=list)
 
     def score_display(self) -> str:
         if self.score_mate is not None:

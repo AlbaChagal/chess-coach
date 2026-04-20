@@ -1,8 +1,23 @@
 (function () {
   const ANALYZE_STORAGE_KEY = "chesscoach-analyze-state";
   const SETTINGS_STORAGE_KEY = "chesscoach-ui-settings";
-  const PIECE_THEME_URL =
-    "https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png";
+  const STARTING_POSITION_FEN =
+    "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+  const FILES = "abcdefgh";
+  const PIECE_TO_GLYPH = {
+    P: "♙",
+    N: "♘",
+    B: "♗",
+    R: "♖",
+    Q: "♕",
+    K: "♔",
+    p: "♟",
+    n: "♞",
+    b: "♝",
+    r: "♜",
+    q: "♛",
+    k: "♚",
+  };
 
   function showError(target, message) {
     if (!target) {
@@ -197,11 +212,19 @@
       analysis: state.analysis,
       explanation: state.explanation,
     };
-    window.sessionStorage.setItem(ANALYZE_STORAGE_KEY, JSON.stringify(payload));
+    try {
+      window.sessionStorage.setItem(ANALYZE_STORAGE_KEY, JSON.stringify(payload));
+    } catch (_error) {
+      // Ignore storage failures so analysis rendering still works.
+    }
   }
 
   function clearAnalyzeStateStorage() {
-    window.sessionStorage.removeItem(ANALYZE_STORAGE_KEY);
+    try {
+      window.sessionStorage.removeItem(ANALYZE_STORAGE_KEY);
+    } catch (_error) {
+      // Ignore storage failures so reset still works.
+    }
   }
 
   function setupProfileApp(root) {
@@ -423,9 +446,6 @@
     const structuredDetails = root.querySelector("[data-structured-details]");
     const structuredContent = root.querySelector("[data-structured-content]");
 
-    let boardWidget = null;
-    let boardShowNotation = null;
-
     function render() {
       stepSections.forEach((section) => {
         section.hidden = section.dataset.step !== state.step;
@@ -508,6 +528,7 @@
       playedToSelect.value = state.explanation.playedMove.to;
       playedPromotionSelect.value = state.explanation.playedMove.promotion;
 
+      renderPreviewBoard();
       renderAnalysisState();
       renderExplanationState();
       persistAnalyzeState(state);
@@ -523,12 +544,11 @@
       }
 
       if (analysis.status !== "success" || !analysis.result) {
+        renderPlaybackControls();
         return;
       }
 
       renderLineList();
-      renderBoard();
-      renderArrow();
       renderPlaybackControls();
     }
 
@@ -810,24 +830,41 @@
       }
     }
 
-    function svgPointFromEvent(event) {
-      const point = overlaySvg.createSVGPoint();
-      point.x = event.clientX;
-      point.y = event.clientY;
-      const matrix = overlaySvg.getScreenCTM();
-      if (!matrix) {
+    function imagePointFromEvent(event) {
+      if (!state.detection) {
         return null;
       }
-      return point.matrixTransform(matrix.inverse());
+      const rect = stageImage.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) {
+        return null;
+      }
+      let x =
+        ((event.clientX - rect.left) / rect.width) * state.detection.image_width;
+      let y =
+        ((event.clientY - rect.top) / rect.height) * state.detection.image_height;
+      if (state.flipped) {
+        x = state.detection.image_width - x;
+        y = state.detection.image_height - y;
+      }
+      return { x, y };
     }
 
-    function handleOverlayClick(event) {
+    function handleStageClick(event) {
       if (!state.detection || !state.detection.board_corners) {
         return;
       }
       clearError(detectError);
-      const point = svgPointFromEvent(event);
+      const point = imagePointFromEvent(event);
       if (!point) {
+        return;
+      }
+      if (
+        point.x < 0 ||
+        point.x > state.detection.image_width ||
+        point.y < 0 ||
+        point.y > state.detection.image_height
+      ) {
+        showError(detectError, "Tap inside the detected board area.");
         return;
       }
       const corners = state.detection.board_corners;
@@ -893,9 +930,12 @@
         });
         const completionPayload = await completionResponse.json();
         if (!completionResponse.ok || completionPayload.status !== "success") {
+          const warning = completionPayload.warnings && completionPayload.warnings[0];
           showError(
             completeError,
-            completionPayload.detail || "Unable to complete the position."
+            (warning && warning.message) ||
+              completionPayload.detail ||
+              "Unable to complete the position."
           );
           return;
         }
@@ -915,19 +955,6 @@
 
     async function enterAnalysisMode() {
       if (!state.completedPosition) {
-        return;
-      }
-      if (
-        typeof window.Chessboard === "undefined" ||
-        typeof window.Chess === "undefined"
-      ) {
-        showError(
-          analysisError,
-          "Analysis board assets failed to load. Please refresh and try again."
-        );
-        state.step = "analysis";
-        state.analysis.status = "failed";
-        render();
         return;
       }
       state.step = "analysis";
@@ -1192,49 +1219,60 @@
       });
     }
 
-    function renderBoard() {
-      const currentFen = currentPlaybackFen(state);
-      const orientation = state.analysis.flipped ? "black" : "white";
-      const showNotation = loadSettings().showCoordinates;
-      const config = {
-        draggable: false,
-        position: currentFen,
-        orientation,
-        showNotation,
-        pieceTheme: PIECE_THEME_URL,
-      };
-      if (boardWidget === null || boardShowNotation !== showNotation) {
-        destroyBoard();
-        boardWidget = window.Chessboard(analysisBoardElement, config);
-        boardShowNotation = showNotation;
-      } else {
-        boardWidget.orientation(orientation);
-        boardWidget.position(currentFen, false);
+    function renderPreviewBoard() {
+      if (!analysisBoardElement) {
+        return;
       }
+      const showNotation = loadSettings().showCoordinates;
+      const orientation = state.analysis.flipped ? "black" : "white";
+      const previewFen =
+        (state.analysis.status === "success" ? currentPlaybackFen(state) : null) ||
+        state.completedPosition?.fen ||
+        STARTING_POSITION_FEN;
+      const boardReadyNow = rebuildBoard(
+        analysisBoardElement,
+        previewFen,
+        orientation,
+        showNotation
+      );
+      if (!boardReadyNow) {
+        showError(
+          analysisError,
+          "Board preview unavailable right now. Lines and scores are still available."
+        );
+        analysisArrow.hidden = true;
+        analysisArrowLayer.hidden = true;
+        return;
+      }
+      if (state.analysis.status === "success") {
+        renderArrow();
+        return;
+      }
+      analysisArrow.hidden = true;
+      analysisArrowLayer.hidden = true;
     }
 
     function destroyBoard() {
-      if (boardWidget && typeof boardWidget.destroy === "function") {
-        boardWidget.destroy();
-      }
-      boardWidget = null;
-      boardShowNotation = null;
       if (analysisBoardElement) {
         analysisBoardElement.innerHTML = "";
       }
     }
 
     function renderPlaybackControls() {
-      const moves = currentLineMoves(state);
-      analysisPrevButton.disabled = state.analysis.stepIndex === 0;
-      analysisNextButton.disabled = state.analysis.stepIndex >= moves.length;
-      analysisResetButton.disabled = state.analysis.stepIndex === 0;
-      analysisStepNote.textContent = `Step ${state.analysis.stepIndex} of ${moves.length}`;
+      const hasAnalysis = state.analysis.status === "success" && !!state.analysis.result;
+      const moves = hasAnalysis ? currentLineMoves(state) : [];
+      analysisPrevButton.disabled = !hasAnalysis || state.analysis.stepIndex === 0;
+      analysisNextButton.disabled =
+        !hasAnalysis || state.analysis.stepIndex >= moves.length;
+      analysisResetButton.disabled = !hasAnalysis || state.analysis.stepIndex === 0;
+      analysisStepNote.textContent = hasAnalysis
+        ? `Step ${state.analysis.stepIndex} of ${moves.length}`
+        : "Preview only";
     }
 
     function renderArrow() {
       const arrowMove = currentArrowMove(state);
-      if (!arrowMove || !boardWidget) {
+      if (!arrowMove) {
         analysisArrow.hidden = true;
         analysisArrowLayer.hidden = true;
         return;
@@ -1281,19 +1319,11 @@
       if (!move) {
         return [];
       }
-      return [move.move_san].concat(move.continuation || []);
+      return [move.move_uci].concat(move.continuation_uci || []);
     }
 
     function currentPlaybackFen(state) {
-      if (!state.completedPosition) {
-        return "start";
-      }
-      const chess = new window.Chess(state.completedPosition.fen);
-      const moves = currentLineMoves(state);
-      for (let index = 0; index < state.analysis.stepIndex; index += 1) {
-        chess.move(moves[index], { sloppy: true });
-      }
-      return chess.fen();
+      return playbackState(state).fen;
     }
 
     function currentArrowMove(state) {
@@ -1304,12 +1334,7 @@
       if (state.analysis.stepIndex >= moves.length) {
         return null;
       }
-      const chess = new window.Chess(currentPlaybackFen(state));
-      const next = chess.move(moves[state.analysis.stepIndex], { sloppy: true });
-      if (!next) {
-        return null;
-      }
-      return next;
+      return uciToMove(moves[state.analysis.stepIndex]);
     }
 
     function playedMoveUci() {
@@ -1395,7 +1420,7 @@
     root
       .querySelector("[data-start-over-button]")
       .addEventListener("click", resetToUpload);
-    overlaySvg.addEventListener("click", handleOverlayClick);
+    stage.addEventListener("click", handleStageClick);
 
     sideButtons.forEach((button) => {
       button.addEventListener("click", () => {
@@ -1448,6 +1473,189 @@
   function squareName(fileIndex, rankIndex) {
     const files = "abcdefgh";
     return `${files[fileIndex]}${8 - rankIndex}`;
+  }
+
+  function rebuildBoard(boardElement, fen, orientation, showNotation) {
+    const placement = parseFenPlacement(fen);
+    if (placement.length !== 8 || placement.some((rank) => rank.length !== 8)) {
+      return false;
+    }
+    const displayPlacement =
+      orientation === "white" ? placement : rotatePlacement(placement);
+    boardElement.className = `analysis-board${showNotation ? " show-coordinates" : ""}`;
+    boardElement.innerHTML = "";
+    for (let rank = 8; rank >= 1; rank -= 1) {
+      for (let fileIndex = 0; fileIndex < FILES.length; fileIndex += 1) {
+        const squareIndex = (8 - rank) * 8 + fileIndex;
+        const logicalSquare =
+          orientation === "white"
+            ? indexToSquare(squareIndex)
+            : indexToSquare(63 - squareIndex);
+        const square = document.createElement("div");
+        const file = FILES[fileIndex];
+        const piece = displayPlacement[8 - rank][fileIndex];
+        square.className =
+          `analysis-square ${(fileIndex + rank) % 2 === 0 ? "dark" : "light"} square-${logicalSquare}`;
+        square.dataset.square = logicalSquare;
+
+        if (showNotation && rank === 1) {
+          const fileLabel = document.createElement("span");
+          fileLabel.className = "coord-label file-label";
+          fileLabel.textContent = file;
+          square.appendChild(fileLabel);
+        }
+        if (showNotation && fileIndex === 0) {
+          const rankLabel = document.createElement("span");
+          rankLabel.className = "coord-label rank-label";
+          rankLabel.textContent = String(rank);
+          square.appendChild(rankLabel);
+        }
+
+        const pieceGlyph = document.createElement("span");
+        pieceGlyph.className = "piece-glyph";
+        pieceGlyph.textContent = piece ? PIECE_TO_GLYPH[piece] : "";
+        square.appendChild(pieceGlyph);
+        boardElement.appendChild(square);
+      }
+    }
+    return true;
+  }
+
+  function parseFenPlacement(fen) {
+    const placement = fen.split(" ")[0];
+    return placement.split("/").map((rankText) => {
+      const rank = [];
+      rankText.split("").forEach((char) => {
+        if (char >= "1" && char <= "8") {
+          for (let count = 0; count < Number(char); count += 1) {
+            rank.push(null);
+          }
+          return;
+        }
+        rank.push(char);
+      });
+      return rank;
+    });
+  }
+
+  function rotatePlacement(placement) {
+    return placement
+      .slice()
+      .reverse()
+      .map((rank) => rank.slice().reverse());
+  }
+
+  function playbackState(state) {
+    if (!state.completedPosition) {
+      return { fen: "8/8/8/8/8/8/8/8 w - - 0 1" };
+    }
+    let boardState = boardStateFromFen(state.completedPosition.fen);
+    const moves = currentLineMoves(state);
+    for (let index = 0; index < state.analysis.stepIndex; index += 1) {
+      const move = moves[index];
+      if (!move) {
+        break;
+      }
+      boardState = applyUciMove(boardState, move);
+    }
+    return {
+      fen: fenFromBoardState(boardState),
+    };
+  }
+
+  function boardStateFromFen(fen) {
+    const parts = fen.split(" ");
+    return {
+      placement: parseFenPlacement(fen),
+      turn: parts[1] || "w",
+    };
+  }
+
+  function fenFromBoardState(boardState) {
+    const ranks = boardState.placement.map((rank) => {
+      let text = "";
+      let empties = 0;
+      rank.forEach((piece) => {
+        if (piece === null) {
+          empties += 1;
+          return;
+        }
+        if (empties > 0) {
+          text += String(empties);
+          empties = 0;
+        }
+        text += piece;
+      });
+      if (empties > 0) {
+        text += String(empties);
+      }
+      return text;
+    });
+    return `${ranks.join("/")} ${boardState.turn} - - 0 1`;
+  }
+
+  function applyUciMove(boardState, uci) {
+    const nextPlacement = boardState.placement.map((rank) => rank.slice());
+    const move = uciToMove(uci);
+    if (!move) {
+      return boardState;
+    }
+    const [fromRow, fromCol] = squareToIndices(move.from);
+    const [toRow, toCol] = squareToIndices(move.to);
+    let piece = nextPlacement[fromRow][fromCol];
+    nextPlacement[fromRow][fromCol] = null;
+    if (piece === null) {
+      return {
+        placement: nextPlacement,
+        turn: boardState.turn === "w" ? "b" : "w",
+      };
+    }
+
+    if ((piece === "K" || piece === "k") && Math.abs(toCol - fromCol) === 2) {
+      const rookFromCol = toCol > fromCol ? 7 : 0;
+      const rookToCol = toCol > fromCol ? toCol - 1 : toCol + 1;
+      nextPlacement[toRow][rookToCol] = nextPlacement[toRow][rookFromCol];
+      nextPlacement[toRow][rookFromCol] = null;
+    }
+
+    if ((piece === "P" || piece === "p") && fromCol !== toCol && nextPlacement[toRow][toCol] === null) {
+      const captureRow = piece === "P" ? toRow + 1 : toRow - 1;
+      if (captureRow >= 0 && captureRow < 8) {
+        nextPlacement[captureRow][toCol] = null;
+      }
+    }
+
+    if (move.promotion) {
+      piece = piece === piece.toUpperCase()
+        ? move.promotion.toUpperCase()
+        : move.promotion.toLowerCase();
+    }
+    nextPlacement[toRow][toCol] = piece;
+    return {
+      placement: nextPlacement,
+      turn: boardState.turn === "w" ? "b" : "w",
+    };
+  }
+
+  function uciToMove(uci) {
+    if (!uci || uci.length < 4) {
+      return null;
+    }
+    return {
+      from: uci.slice(0, 2),
+      to: uci.slice(2, 4),
+      promotion: uci.length > 4 ? uci.slice(4, 5) : "",
+    };
+  }
+
+  function squareToIndices(square) {
+    return [8 - Number(square[1]), FILES.indexOf(square[0])];
+  }
+
+  function indexToSquare(index) {
+    const row = Math.floor(index / 8);
+    const col = index % 8;
+    return `${FILES[col]}${8 - row}`;
   }
 
   function squarePolygonPoints(state) {

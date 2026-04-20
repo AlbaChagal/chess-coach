@@ -40,6 +40,12 @@ LOW_CONFIDENCE_WARNING = PipelineWarning(
     code="board_detection_low_confidence",
     message=("The board could not be detected. Please try to upload a clearer image."),
 )
+INVALID_BOARD_POSITION_WARNING = PipelineWarning(
+    code="invalid_board_position",
+    message=(
+        "The detected board position looks invalid. Please try to upload a clearer image."
+    ),
+)
 EXPLANATION_UNAVAILABLE_WARNING = PipelineWarning(
     code="explanation_skipped_unavailable",
     message="Explanation was skipped because no LLM provider is configured.",
@@ -402,7 +408,18 @@ def run_coaching_pipeline(request: CoachingRequest) -> CoachingResult:
             warnings=warnings,
         )
 
-    position = complete_position(vision_result, request)
+    try:
+        position = complete_position(vision_result, request)
+    except ValueError:
+        return CoachingResult(
+            vision=vision_result,
+            position=None,
+            analysis=None,
+            explanation=None,
+            status="failed",
+            user_action_required=None,
+            warnings=[*warnings, INVALID_BOARD_POSITION_WARNING],
+        )
     if request.side_to_move is None:
         return CoachingResult(
             vision=vision_result,

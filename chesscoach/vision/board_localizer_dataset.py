@@ -22,6 +22,8 @@ _MAX_CONTRAST_SCALE = 1.1
 _BLUR_PROBABILITY = 0.15
 _PERSPECTIVE_JITTER_PROBABILITY = 0.7
 _MAX_CORNER_JITTER_RATIO = 0.06
+_TRANSLATION_JITTER_PROBABILITY = 0.7
+_MAX_CANVAS_EXPANSION_RATIO = 0.35
 
 
 def _apply_color_jitter(image: np.ndarray) -> np.ndarray:
@@ -93,6 +95,44 @@ def _apply_perspective_jitter(
     return warped, remapped_corners.astype(np.float32)
 
 
+def _apply_translation_jitter(
+    image: np.ndarray,
+    corners: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Translate the image within a larger replicated canvas and remap corners."""
+    if random.random() >= _TRANSLATION_JITTER_PROBABILITY:
+        return image, corners
+
+    height, width = image.shape[:2]
+    max_pad_x = max(int(round(width * _MAX_CANVAS_EXPANSION_RATIO)), 1)
+    max_pad_y = max(int(round(height * _MAX_CANVAS_EXPANSION_RATIO)), 1)
+    pad_left = random.randint(0, max_pad_x)
+    pad_right = random.randint(0, max_pad_x)
+    pad_top = random.randint(0, max_pad_y)
+    pad_bottom = random.randint(0, max_pad_y)
+    expanded = cv2.copyMakeBorder(
+        image,
+        pad_top,
+        pad_bottom,
+        pad_left,
+        pad_right,
+        borderType=cv2.BORDER_REPLICATE,
+    )
+
+    available_x = expanded.shape[1] - width
+    available_y = expanded.shape[0] - height
+    offset_x = random.randint(0, available_x) if available_x > 0 else 0
+    offset_y = random.randint(0, available_y) if available_y > 0 else 0
+    translated = expanded[offset_y : offset_y + height, offset_x : offset_x + width]
+
+    remapped_corners = corners.copy()
+    remapped_corners[:, 0] += float(pad_left - offset_x)
+    remapped_corners[:, 1] += float(pad_top - offset_y)
+    remapped_corners[:, 0] = np.clip(remapped_corners[:, 0], 0.0, width - 1.0)
+    remapped_corners[:, 1] = np.clip(remapped_corners[:, 1], 0.0, height - 1.0)
+    return translated, remapped_corners.astype(np.float32)
+
+
 def _build_transform(image_size: int) -> transforms.Compose:
     return transforms.Compose(
         [
@@ -145,6 +185,7 @@ class BoardLocalizationDataset(Dataset[tuple[torch.Tensor, torch.Tensor, torch.T
             raise FileNotFoundError(f"Could not read board-localizer image: {image_path}")
         corners = np.array(record["board_corners"], dtype=np.float32)
         if self._augment:
+            image, corners = _apply_translation_jitter(image, corners)
             image, corners = _apply_perspective_jitter(image, corners)
             image = _augment_localizer_sample(image)
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
