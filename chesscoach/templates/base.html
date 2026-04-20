@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    >
+    <title>{{ page_title }} | ChessCoach</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body class="{% block body_class %}page{% endblock %}">
+    {% block content %}{% endblock %}
+    <script src="/static/app.js"></script>
+    {% block scripts %}{% endblock %}
+  </body>
+</html>

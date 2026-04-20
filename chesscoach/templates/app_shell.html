@@ -1,0 +1,253 @@
+{% extends "base.html" %}
+
+{% block body_class %}app-page{% endblock %}
+
+{% block content %}
+<main class="app-shell">
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">ChessCoach</p>
+      <h1>{{ heading }}</h1>
+      <p class="screen-subheading">{{ subheading }}</p>
+    </div>
+    <div class="user-chip">{{ user.email }}</div>
+  </header>
+
+  <section class="app-card">
+    {% if body_variant == "analyze" %}
+    <div
+      class="analyze-flow"
+      data-analyze-app
+      data-detect-endpoint="/detect-board"
+      data-vision-endpoint="/vision"
+      data-complete-endpoint="/complete-position"
+    >
+      <div class="step-indicator">
+        <span class="step-pill active" data-step-pill="upload">1. Image</span>
+        <span class="step-pill" data-step-pill="orientation">2. Orientation</span>
+        <span class="step-pill" data-step-pill="side">3. Side to move</span>
+        <span class="step-pill" data-step-pill="ready">4. Ready</span>
+      </div>
+
+      <section class="analyze-step" data-step="upload">
+        <div class="placeholder-block">
+          <div class="placeholder-illustration upload-stage"></div>
+          <h2>Load a Board Image</h2>
+          <p>
+            Choose a clear board photo to start the analysis funnel. Keep the
+            whole board visible and avoid blur or glare.
+          </p>
+          <ul class="feature-list">
+            <li>Upload an image from your device</li>
+            <li>Use camera capture where supported by your browser</li>
+            <li>Review the preview before board detection runs</li>
+          </ul>
+        </div>
+
+        <div class="upload-actions">
+          <label class="primary-button file-button">
+            Upload Image
+            <input type="file" accept="image/*" data-image-input hidden>
+          </label>
+          <label class="secondary-link file-button">
+            Take Photo
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              data-camera-input
+              hidden
+            >
+          </label>
+        </div>
+
+        <p class="form-error" data-upload-error hidden></p>
+
+        <div class="image-preview-card" data-image-preview-card hidden>
+          <img alt="Selected board preview" class="image-preview" data-image-preview>
+        </div>
+
+        <div class="step-actions">
+          <button class="primary-button" data-detect-button disabled>
+            Detect Board
+          </button>
+          <button class="secondary-link" data-reset-image-button hidden>
+            Choose Different Image
+          </button>
+        </div>
+      </section>
+
+      <section class="analyze-step" data-step="orientation" hidden>
+        <div class="orientation-header">
+          <h2>Where did the white king start the game?</h2>
+          <p>
+            Tap the square on the detected board overlay. This helps orient the
+            board correctly before analysis.
+          </p>
+        </div>
+
+        <p class="form-error" data-detect-error hidden></p>
+
+        <div class="image-stage" data-image-stage>
+          <img alt="Board preview" class="image-preview" data-stage-image>
+          <svg
+            class="board-overlay"
+            data-overlay-svg
+            preserveAspectRatio="none"
+          >
+            <polygon class="board-outline" data-board-outline></polygon>
+            <polygon class="selected-square" data-selected-square hidden></polygon>
+            <circle class="selected-point" data-selected-point hidden r="6"></circle>
+          </svg>
+        </div>
+
+        <div class="orientation-meta">
+          <p class="selection-note" data-selection-note>
+            No square selected yet.
+          </p>
+        </div>
+
+        <div class="step-actions">
+          <button class="secondary-link" data-back-to-upload-button>
+            Back
+          </button>
+          <button class="secondary-link" data-flip-button>
+            Flip Board
+          </button>
+          <button class="primary-button" data-orientation-continue-button disabled>
+            Continue
+          </button>
+        </div>
+      </section>
+
+      <section class="analyze-step" data-step="side" hidden>
+        <div class="orientation-header">
+          <h2>Who moves next?</h2>
+          <p>
+            A single image does not reliably determine side to move, so choose
+            it explicitly before we complete the position.
+          </p>
+        </div>
+
+        <div class="side-grid">
+          <button class="side-option" data-side-option="w">White to move</button>
+          <button class="side-option" data-side-option="b">Black to move</button>
+        </div>
+
+        <p class="selection-note" data-side-note>No side selected yet.</p>
+        <p class="form-error" data-complete-error hidden></p>
+
+        <div class="step-actions">
+          <button class="secondary-link" data-back-to-orientation-button>
+            Back
+          </button>
+          <button class="primary-button" data-complete-button disabled>
+            Complete Position
+          </button>
+        </div>
+      </section>
+
+      <section class="analyze-step" data-step="ready" hidden>
+        <div class="placeholder-block">
+          <div class="placeholder-illustration saved-stage"></div>
+          <h2>Position Ready</h2>
+          <p>
+            The board image, white-king-start click, and side to move have been
+            combined into a completed position that is ready for the analysis
+            screen in Phase 3.
+          </p>
+        </div>
+
+        <div class="ready-summary">
+          <div class="summary-row">
+            <span>Completed FEN</span>
+            <code data-ready-fen>-</code>
+          </div>
+          <div class="summary-row">
+            <span>Castling</span>
+            <code data-ready-castling>-</code>
+          </div>
+          <div class="summary-row">
+            <span>En passant</span>
+            <code data-ready-en-passant>-</code>
+          </div>
+        </div>
+
+        <div class="step-actions">
+          <button class="secondary-link" data-start-over-button>Start Over</button>
+          <button class="primary-button" disabled>
+            Continue to Analysis (Phase 3)
+          </button>
+        </div>
+      </section>
+    </div>
+    {% elif body_variant == "saved" %}
+    <div class="placeholder-block">
+      <div class="placeholder-illustration saved-stage"></div>
+      <h2>Saved Snapshots Coming Next</h2>
+      <p>
+        Synced full-analysis snapshots will live here once save flows and
+        account-bound history are implemented.
+      </p>
+      <ul class="feature-list">
+        <li>Account-tied saved positions</li>
+        <li>Snapshot reopening</li>
+        <li>Future dedicated library/history tab</li>
+      </ul>
+    </div>
+    {% else %}
+    <div class="profile-stack">
+      <section class="profile-card">
+        <h2>Account</h2>
+        <p class="profile-email">{{ user.email }}</p>
+      </section>
+
+      <section class="profile-card">
+        <h2>Display Settings</h2>
+        <div class="setting-row">
+          <span>Board Style</span>
+          <select disabled>
+            <option selected>Classic Wood</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <span>Show Legal Moves</span>
+          <label class="switch">
+            <input type="checkbox" checked disabled>
+            <span class="switch-track"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <span>Coordinates Display</span>
+          <label class="switch">
+            <input type="checkbox" checked disabled>
+            <span class="switch-track"></span>
+          </label>
+        </div>
+        <p class="setting-note">
+          Settings are visible now and will become live app preferences in a
+          later phase.
+        </p>
+      </section>
+
+      <section class="profile-card">
+        <h2>Saved Positions</h2>
+        <p>Saved analysis snapshots will sync to this account.</p>
+        <a href="/app/saved" class="secondary-link">Open Saved</a>
+      </section>
+
+      <section class="profile-card">
+        <h2>Session</h2>
+        <button class="danger-button" data-logout-button>Log Out</button>
+      </section>
+    </div>
+    {% endif %}
+  </section>
+
+  <nav class="tab-bar" aria-label="Primary">
+    <a href="/app/analyze" class="tab-link {% if active_tab == 'analyze' %}active{% endif %}">Analyze</a>
+    <a href="/app/saved" class="tab-link {% if active_tab == 'saved' %}active{% endif %}">Saved</a>
+    <a href="/app/profile" class="tab-link {% if active_tab == 'profile' %}active{% endif %}">Profile</a>
+  </nav>
+</main>
+{% endblock %}

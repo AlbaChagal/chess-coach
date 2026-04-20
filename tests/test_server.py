@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 
+import cv2
+import pytest
 from fastapi.testclient import TestClient
 
 from chesscoach.analysis.models import MoveAnalysis
@@ -20,17 +22,27 @@ from chesscoach.pipeline_models import (
     VisionResult,
 )
 from chesscoach.server import create_app
+from tests.vision.conftest import make_synthetic_board
 
 STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 STARTING_PLACEMENT = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch) -> TestClient:
+    monkeypatch.setenv("CHESSCOACH_AUTH_DB", str(tmp_path / "auth.db"))
+    monkeypatch.setenv("CHESSCOACH_SESSION_SECRET", "test-session-secret")
+    return TestClient(create_app())
 
 
 def _image_payload() -> str:
     return base64.b64encode(b"fake-image-bytes").decode("ascii")
 
 
-def _client() -> TestClient:
-    return TestClient(create_app())
+def _board_payload(board) -> str:
+    success, encoded = cv2.imencode(".png", board)
+    assert success
+    return base64.b64encode(encoded.tobytes()).decode("ascii")
 
 
 def _analysis_result() -> AnalysisResult:
@@ -59,23 +71,182 @@ def _position() -> CompletedPosition:
     )
 
 
-def test_health_endpoint_returns_ok() -> None:
-    response = _client().get("/health")
+def _signup(client: TestClient, email: str = "user@example.com") -> None:
+    response = client.post(
+        "/auth/signup",
+        json={"email": email, "password": "strongpass"},
+    )
+    assert response.status_code == 200
+
+
+def test_root_redirects_to_login_when_logged_out(client: TestClient) -> None:
+    response = client.get("/", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/login"
+
+
+def test_login_page_renders_auth_ui(client: TestClient) -> None:
+    response = client.get("/login")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    assert "Improve Your Chess" in response.text
+    assert "data-auth-form" in response.text
 
 
-def test_root_endpoint_returns_landing_page() -> None:
-    response = _client().get("/")
+def test_signup_creates_user_and_session(client: TestClient) -> None:
+    response = client.post(
+        "/auth/signup",
+        json={"email": "user@example.com", "password": "strongpass"},
+    )
 
     assert response.status_code == 200
-    assert "ChessCoach API" in response.text
-    assert "/docs" in response.text
+    assert response.json()["user"]["email"] == "user@example.com"
+    assert "chesscoach_session" in response.cookies
 
 
-def test_vision_endpoint_decodes_image_and_returns_result(monkeypatch) -> None:
-    captured = {}
+def test_signup_rejects_duplicate_email(client: TestClient) -> None:
+    _signup(client)
+
+    response = client.post(
+        "/auth/signup",
+        json={"email": "user@example.com", "password": "strongpass"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "An account with this email already exists."
+
+
+def test_login_rejects_invalid_credentials(client: TestClient) -> None:
+    _signup(client)
+    client.post("/auth/logout")
+
+    response = client.post(
+        "/auth/login",
+        json={"email": "user@example.com", "password": "wrongpass"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid email or password."
+
+
+def test_auth_me_requires_session(client: TestClient) -> None:
+    response = client.get("/auth/me")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Not authenticated."
+
+
+def test_auth_me_returns_authenticated_user(client: TestClient) -> None:
+    _signup(client)
+
+    response = client.get("/auth/me")
+
+    assert response.status_code == 200
+    assert response.json()["user"]["email"] == "user@example.com"
+
+
+def test_session_persists_across_requests(client: TestClient) -> None:
+    _signup(client)
+
+    first = client.get("/app/analyze")
+    second = client.get("/auth/me")
+
+    assert first.status_code == 200
+    assert "Load a Board Image" in first.text
+    assert second.status_code == 200
+    assert second.json()["user"]["email"] == "user@example.com"
+
+
+def test_protected_route_redirects_to_login(client: TestClient) -> None:
+    response = client.get("/app/profile", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/login?next=/app/profile"
+
+
+def test_authenticated_root_redirects_into_app(client: TestClient) -> None:
+    _signup(client)
+
+    response = client.get("/", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/app/analyze"
+
+
+def test_profile_page_renders_user_and_logout(client: TestClient) -> None:
+    _signup(client)
+
+    response = client.get("/app/profile")
+
+    assert response.status_code == 200
+    assert "user@example.com" in response.text
+    assert "Log Out" in response.text
+    assert "Display Settings" in response.text
+
+
+def test_logout_clears_session(client: TestClient) -> None:
+    _signup(client)
+
+    logout = client.post("/auth/logout")
+    redirected = client.get("/app/analyze", follow_redirects=False)
+
+    assert logout.status_code == 200
+    assert redirected.status_code == 302
+    assert redirected.headers["location"] == "/login?next=/app/analyze"
+
+
+def test_saved_page_placeholder_renders(client: TestClient) -> None:
+    _signup(client)
+
+    response = client.get("/app/saved")
+
+    assert response.status_code == 200
+    assert "Saved Snapshots Coming Next" in response.text
+
+
+def test_analyze_page_renders_phase_two_flow_shell(client: TestClient) -> None:
+    _signup(client)
+
+    response = client.get("/app/analyze")
+
+    assert response.status_code == 200
+    assert "Load a Board Image" in response.text
+    assert "Where did the white king start the game?" in response.text
+    assert 'data-detect-endpoint="/detect-board"' in response.text
+
+
+def test_detect_board_endpoint_returns_corners_for_detectable_board(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/detect-board",
+        json={"image_base64": _board_payload(make_synthetic_board())},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert len(payload["detection"]["board_corners"]) == 4
+    assert payload["detection"]["confidence"] == 1.0
+
+
+def test_detect_board_endpoint_returns_warning_on_failure(client: TestClient) -> None:
+    blank = _board_payload(make_synthetic_board() * 0)
+
+    response = client.post("/detect-board", json={"image_base64": blank})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "failed"
+    assert payload["detection"]["board_corners"] is None
+    assert payload["warnings"][0]["code"] == "board_detection_low_confidence"
+
+
+def test_vision_endpoint_decodes_image_and_returns_result(
+    client: TestClient, monkeypatch
+) -> None:
+    captured: dict[str, object] = {}
 
     def _run_vision(request):
         captured["image"] = request.image
@@ -93,7 +264,7 @@ def test_vision_endpoint_decodes_image_and_returns_result(monkeypatch) -> None:
 
     monkeypatch.setattr("chesscoach.server.run_vision", _run_vision)
 
-    response = _client().post(
+    response = client.post(
         "/vision",
         json={
             "image_base64": _image_payload(),
@@ -109,8 +280,8 @@ def test_vision_endpoint_decodes_image_and_returns_result(monkeypatch) -> None:
     assert captured["click"] == ImageClick(x=12.0, y=34.0)
 
 
-def test_vision_endpoint_rejects_invalid_base64() -> None:
-    response = _client().post(
+def test_vision_endpoint_rejects_invalid_base64(client: TestClient) -> None:
+    response = client.post(
         "/vision",
         json={
             "image_base64": "not-valid-base64",
@@ -122,8 +293,10 @@ def test_vision_endpoint_rejects_invalid_base64() -> None:
     assert response.json()["detail"] == "Invalid image_base64 payload."
 
 
-def test_complete_position_endpoint_returns_partial_when_side_missing() -> None:
-    response = _client().post(
+def test_complete_position_endpoint_returns_partial_when_side_missing(
+    client: TestClient,
+) -> None:
+    response = client.post(
         "/complete-position",
         json={
             "fen_placement": STARTING_PLACEMENT,
@@ -137,8 +310,8 @@ def test_complete_position_endpoint_returns_partial_when_side_missing() -> None:
     assert response.json()["user_action_required"] == "side_to_move"
 
 
-def test_complete_position_endpoint_returns_completed_fen() -> None:
-    response = _client().post(
+def test_complete_position_endpoint_returns_completed_fen(client: TestClient) -> None:
+    response = client.post(
         "/complete-position",
         json={
             "fen_placement": STARTING_PLACEMENT,
@@ -153,19 +326,23 @@ def test_complete_position_endpoint_returns_completed_fen() -> None:
     assert payload["position"]["fen"] == STARTING_FEN
 
 
-def test_analyze_endpoint_returns_score_display(monkeypatch) -> None:
+def test_analyze_endpoint_returns_score_display(
+    client: TestClient, monkeypatch
+) -> None:
     monkeypatch.setattr(
         "chesscoach.server.run_analysis", lambda position, top_n: _analysis_result()
     )
 
-    response = _client().post("/analyze", json={"fen": STARTING_FEN, "top_n": 2})
+    response = client.post("/analyze", json={"fen": STARTING_FEN, "top_n": 2})
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["analysis"]["top_moves"][0]["score_display"] == "+0.35"
 
 
-def test_explain_endpoint_returns_analysis_and_explanation(monkeypatch) -> None:
+def test_explain_endpoint_returns_analysis_and_explanation(
+    client: TestClient, monkeypatch
+) -> None:
     monkeypatch.setattr(
         "chesscoach.server.run_analysis", lambda position, top_n: _analysis_result()
     )
@@ -213,14 +390,16 @@ def test_explain_endpoint_returns_analysis_and_explanation(monkeypatch) -> None:
             [
                 PipelineWarning(
                     code="explanation_skipped_unavailable",
-                    message="Explanation was skipped because no LLM provider is configured.",
+                    message=(
+                        "Explanation was skipped because no LLM provider is configured."
+                    ),
                 )
             ],
         )
 
     monkeypatch.setattr("chesscoach.server.run_explanation", _run_explanation)
 
-    response = _client().post(
+    response = client.post(
         "/explain",
         json={"fen": STARTING_FEN, "played_move_uci": "d2d4"},
     )
@@ -229,11 +408,15 @@ def test_explain_endpoint_returns_analysis_and_explanation(monkeypatch) -> None:
     payload = response.json()
     assert payload["status"] == "success"
     assert payload["analysis"]["top_moves"][0]["score_display"] == "+0.35"
-    assert payload["explanation"]["played_move_result"]["quality_label"] == "inaccuracy"
+    assert payload["explanation"]["played_move_result"]["quality_label"] == (
+        "inaccuracy"
+    )
     assert payload["warnings"][0]["code"] == "explanation_skipped_unavailable"
 
 
-def test_coach_endpoint_returns_full_pipeline_payload(monkeypatch) -> None:
+def test_coach_endpoint_returns_full_pipeline_payload(
+    client: TestClient, monkeypatch
+) -> None:
     def _run_pipeline(request):
         assert request.image == b"fake-image-bytes"
         return CoachingResult(
@@ -254,7 +437,7 @@ def test_coach_endpoint_returns_full_pipeline_payload(monkeypatch) -> None:
 
     monkeypatch.setattr("chesscoach.server.run_coaching_pipeline", _run_pipeline)
 
-    response = _client().post(
+    response = client.post(
         "/coach",
         json={
             "image_base64": _image_payload(),

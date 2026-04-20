@@ -1,16 +1,30 @@
-"""HTTP API for the mobile-ready ChessCoach backend flow."""
+"""HTTP API and browser UI for ChessCoach."""
 
 from __future__ import annotations
 
 import base64
 import binascii
-from typing import Literal, cast
+from pathlib import Path
+from typing import Any, Literal, cast
 
 import chess
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+import cv2
+import numpy as np
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
+from chesscoach.auth import (
+    DEFAULT_SESSION_COOKIE,
+    AuthError,
+    AuthStore,
+    UserRecord,
+    create_auth_store,
+    decode_session_cookie,
+    encode_session_cookie,
+)
 from chesscoach.pipeline import (
     complete_position,
     coaching_result_to_dict,
@@ -21,10 +35,20 @@ from chesscoach.pipeline import (
     serialize_pipeline_value,
 )
 from chesscoach.pipeline_models import (
+    PipelineWarning,
     CoachingRequest,
     CompletedPosition,
     ImageClick,
     VisionResult,
+)
+from chesscoach.vision import BoardNotFoundError
+from chesscoach.vision.board_detector import detect_board_corners
+
+TEMPLATES_DIR = Path(__file__).with_name("templates")
+STATIC_DIR = Path(__file__).with_name("static")
+LOW_CONFIDENCE_WARNING = PipelineWarning(
+    code="board_detection_low_confidence",
+    message="The board could not be detected. Please try to upload a clearer image.",
 )
 
 
@@ -40,6 +64,12 @@ class VisionApiRequest(BaseModel):
 
     image_base64: str
     white_king_start_click: ApiImageClick
+
+
+class DetectBoardApiRequest(BaseModel):
+    """Request body for the staged board-detection endpoint."""
+
+    image_base64: str
 
 
 class CompletePositionApiRequest(BaseModel):
@@ -84,83 +114,211 @@ class CoachApiRequest(BaseModel):
     top_n: int = Field(default=3, ge=1)
 
 
+class SignupRequest(BaseModel):
+    """Request body for user signup."""
+
+    email: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    """Request body for user login."""
+
+    email: str
+    password: str
+
+
 def create_app() -> FastAPI:
-    """Create the FastAPI application for the ChessCoach backend."""
-    app = FastAPI(title="ChessCoach API", version="0.1.0")
+    """Create the FastAPI application for the ChessCoach backend and UI."""
+    app = FastAPI(title="ChessCoach API", version="0.2.0")
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.state.auth_store = _initialize_auth_store()
+    templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
     @app.get("/", response_class=HTMLResponse)
-    def root() -> str:
-        """Return a simple landing page for browser-based local testing."""
-        return """
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>ChessCoach API</title>
-    <style>
-      :root {
-        color-scheme: light;
-        --bg: #f4efe2;
-        --panel: #fffaf0;
-        --ink: #1f1a17;
-        --muted: #5c5146;
-        --accent: #8b5e34;
-        --accent-2: #d8b98a;
-      }
-      body {
-        margin: 0;
-        font-family: Georgia, "Times New Roman", serif;
-        background: radial-gradient(circle at top, #fff7e8, var(--bg));
-        color: var(--ink);
-      }
-      main {
-        max-width: 720px;
-        margin: 48px auto;
-        padding: 32px;
-        background: var(--panel);
-        border: 1px solid var(--accent-2);
-        border-radius: 18px;
-        box-shadow: 0 18px 40px rgba(72, 51, 30, 0.08);
-      }
-      h1 {
-        margin-top: 0;
-        margin-bottom: 12px;
-      }
-      p, li {
-        line-height: 1.55;
-        color: var(--muted);
-      }
-      code {
-        background: #f2e6d5;
-        padding: 2px 6px;
-        border-radius: 6px;
-      }
-      a {
-        color: var(--accent);
-      }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>ChessCoach API</h1>
-      <p>This is the local backend for the mobile-ready ChessCoach flow.</p>
-      <p>Useful endpoints:</p>
-      <ul>
-        <li><a href="/docs">/docs</a> for the interactive API UI</li>
-        <li><a href="/health">/health</a> for a quick health check</li>
-        <li><code>POST /vision</code>, <code>POST /complete-position</code>, <code>POST /analyze</code>, <code>POST /explain</code>, and <code>POST /coach</code></li>
-      </ul>
-      <p>If you opened the base URL expecting a UI, the API docs at <a href="/docs">/docs</a> are the right place to start.</p>
-    </main>
-  </body>
-</html>
-"""
+    def root(request: Request) -> RedirectResponse:
+        """Send users to the correct entry point based on auth state."""
+        user = _current_user_from_request(request, app.state.auth_store)
+        if user is None:
+            return RedirectResponse("/login", status_code=302)
+        return RedirectResponse("/app/analyze", status_code=302)
 
     @app.get("/health")
     def health() -> dict[str, str]:
         """Return a simple health signal for local testing."""
         return {"status": "ok"}
+
+    @app.get("/login", response_class=HTMLResponse)
+    def login_page(request: Request) -> Response:
+        """Render the browser login screen."""
+        user = _current_user_from_request(request, app.state.auth_store)
+        if user is not None:
+            return RedirectResponse("/app/analyze", status_code=302)
+        return templates.TemplateResponse(
+            request=request,
+            name="auth.html",
+            context={
+                "mode": "login",
+                "page_title": "Log In",
+                "auth_heading": "Improve Your Chess",
+                "auth_subheading": "Sign in to access synced analysis and saved positions.",
+                "auth_endpoint": "/auth/login",
+                "submit_label": "Log In",
+                "switch_href": "/signup",
+                "switch_label": "Create account",
+                "show_confirm_password": False,
+            },
+        )
+
+    @app.get("/signup", response_class=HTMLResponse)
+    def signup_page(request: Request) -> Response:
+        """Render the browser signup screen."""
+        user = _current_user_from_request(request, app.state.auth_store)
+        if user is not None:
+            return RedirectResponse("/app/analyze", status_code=302)
+        return templates.TemplateResponse(
+            request=request,
+            name="auth.html",
+            context={
+                "mode": "signup",
+                "page_title": "Create Account",
+                "auth_heading": "Create Your Account",
+                "auth_subheading": "Set up a synced ChessCoach profile with email and password.",
+                "auth_endpoint": "/auth/signup",
+                "submit_label": "Sign Up",
+                "switch_href": "/login",
+                "switch_label": "Log in instead",
+                "show_confirm_password": True,
+            },
+        )
+
+    @app.post("/auth/signup")
+    def signup(payload: SignupRequest) -> JSONResponse:
+        """Create a new auth account and start a session."""
+        try:
+            user = app.state.auth_store.create_user(payload.email, payload.password)
+        except AuthError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        response = JSONResponse(
+            {
+                "status": "success",
+                "user": {"id": user.id, "email": user.email},
+                "redirect_to": "/app/analyze",
+            }
+        )
+        _set_session_cookie(response, user)
+        return response
+
+    @app.post("/auth/login")
+    def login(payload: LoginRequest) -> JSONResponse:
+        """Authenticate a user and start a session."""
+        try:
+            user = app.state.auth_store.authenticate_user(
+                payload.email, payload.password
+            )
+        except AuthError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        response = JSONResponse(
+            {
+                "status": "success",
+                "user": {"id": user.id, "email": user.email},
+                "redirect_to": "/app/analyze",
+            }
+        )
+        _set_session_cookie(response, user)
+        return response
+
+    @app.get("/auth/me")
+    def auth_me(request: Request) -> JSONResponse:
+        """Return the authenticated user for session bootstrap."""
+        user = _current_user_from_request(request, app.state.auth_store)
+        if user is None:
+            raise HTTPException(status_code=401, detail="Not authenticated.")
+        return JSONResponse(
+            {
+                "status": "success",
+                "user": {
+                    "id": user.id,
+                    "email": user.email,
+                    "created_at": user.created_at,
+                },
+            }
+        )
+
+    @app.post("/auth/logout")
+    def logout() -> JSONResponse:
+        """Clear the auth session cookie."""
+        response = JSONResponse({"status": "success", "redirect_to": "/login"})
+        response.delete_cookie(DEFAULT_SESSION_COOKIE, path="/")
+        return response
+
+    @app.get("/app", response_class=HTMLResponse)
+    def app_root(request: Request) -> RedirectResponse:
+        """Redirect the authenticated app root to Analyze."""
+        if _current_user_from_request(request, app.state.auth_store) is None:
+            return _redirect_to_login_response(request)
+        return RedirectResponse("/app/analyze", status_code=302)
+
+    @app.get("/app/analyze", response_class=HTMLResponse)
+    def analyze_page(request: Request) -> Response:
+        """Render the Analyze destination placeholder."""
+        user = _current_user_from_request(request, app.state.auth_store)
+        if user is None:
+            return _redirect_to_login_response(request)
+        return templates.TemplateResponse(
+            request=request,
+            name="app_shell.html",
+            context=_shell_context(
+                active_tab="analyze",
+                page_title="Analyze",
+                heading="Analyze",
+                subheading=(
+                    "Phase 2 will start the image upload and board-orientation flow here."
+                ),
+                user=user,
+                body_variant="analyze",
+            ),
+        )
+
+    @app.get("/app/saved", response_class=HTMLResponse)
+    def saved_page(request: Request) -> Response:
+        """Render the Saved destination placeholder."""
+        user = _current_user_from_request(request, app.state.auth_store)
+        if user is None:
+            return _redirect_to_login_response(request)
+        return templates.TemplateResponse(
+            request=request,
+            name="app_shell.html",
+            context=_shell_context(
+                active_tab="saved",
+                page_title="Saved",
+                heading="Saved Positions",
+                subheading=(
+                    "Synced analysis snapshots will appear here once save flows are implemented."
+                ),
+                user=user,
+                body_variant="saved",
+            ),
+        )
+
+    @app.get("/app/profile", response_class=HTMLResponse)
+    def profile_page(request: Request) -> Response:
+        """Render the Profile destination with logout and settings shell."""
+        user = _current_user_from_request(request, app.state.auth_store)
+        if user is None:
+            return _redirect_to_login_response(request)
+        return templates.TemplateResponse(
+            request=request,
+            name="app_shell.html",
+            context=_shell_context(
+                active_tab="profile",
+                page_title="Profile",
+                heading="Profile",
+                subheading="Manage your account and app display preferences.",
+                user=user,
+                body_variant="profile",
+            ),
+        )
 
     @app.post("/vision")
     def vision(payload: VisionApiRequest) -> dict[str, object]:
@@ -176,6 +334,35 @@ def create_app() -> FastAPI:
             else "failed",
             "vision": serialize_pipeline_value(vision_result),
             "warnings": serialize_pipeline_value(warnings),
+        }
+
+    @app.post("/detect-board")
+    def detect_board(payload: DetectBoardApiRequest) -> dict[str, object]:
+        """Detect board geometry for the staged Analyze UI."""
+        bgr = _decode_image_base64_to_bgr(payload.image_base64)
+        height, width = bgr.shape[:2]
+        try:
+            board_corners = detect_board_corners(bgr)
+        except (BoardNotFoundError, ValueError):
+            return {
+                "status": "failed",
+                "detection": {
+                    "board_corners": None,
+                    "confidence": 0.0,
+                    "image_width": width,
+                    "image_height": height,
+                },
+                "warnings": serialize_pipeline_value([LOW_CONFIDENCE_WARNING]),
+            }
+        return {
+            "status": "success",
+            "detection": {
+                "board_corners": serialize_pipeline_value(board_corners.tolist()),
+                "confidence": 1.0,
+                "image_width": width,
+                "image_height": height,
+            },
+            "warnings": [],
         }
 
     @app.post("/complete-position")
@@ -273,6 +460,59 @@ def create_app() -> FastAPI:
     return app
 
 
+def _initialize_auth_store() -> AuthStore:
+    store = create_auth_store()
+    store.initialize()
+    return store
+
+
+def _set_session_cookie(response: JSONResponse, user: UserRecord) -> None:
+    response.set_cookie(
+        key=DEFAULT_SESSION_COOKIE,
+        value=encode_session_cookie(user),
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+
+
+def _current_user_from_request(
+    request: Request,
+    store: AuthStore,
+) -> UserRecord | None:
+    cookie_value = request.cookies.get(DEFAULT_SESSION_COOKIE)
+    if cookie_value is None:
+        return None
+    user_id = decode_session_cookie(cookie_value)
+    if user_id is None:
+        return None
+    return store.get_user_by_id(user_id)
+
+
+def _shell_context(
+    *,
+    active_tab: str,
+    page_title: str,
+    heading: str,
+    subheading: str,
+    user: UserRecord,
+    body_variant: str,
+) -> dict[str, Any]:
+    return {
+        "page_title": page_title,
+        "active_tab": active_tab,
+        "heading": heading,
+        "subheading": subheading,
+        "user": user,
+        "body_variant": body_variant,
+    }
+
+
+def _redirect_to_login_response(request: Request) -> RedirectResponse:
+    next_path = request.url.path
+    return RedirectResponse(f"/login?next={next_path}", status_code=302)
+
+
 def _decode_image_base64(image_base64: str) -> bytes:
     """Decode a base64 image string, including optional data-URL prefixes."""
     encoded = image_base64
@@ -284,6 +524,16 @@ def _decode_image_base64(image_base64: str) -> bytes:
         raise HTTPException(
             status_code=400, detail="Invalid image_base64 payload."
         ) from exc
+
+
+def _decode_image_base64_to_bgr(image_base64: str) -> np.ndarray:
+    """Decode a base64 image into an OpenCV BGR array."""
+    image_bytes = _decode_image_base64(image_base64)
+    array = np.frombuffer(image_bytes, dtype=np.uint8)
+    bgr = cv2.imdecode(array, cv2.IMREAD_COLOR)
+    if bgr is None:
+        raise HTTPException(status_code=400, detail="Invalid image_base64 payload.")
+    return bgr
 
 
 def _to_image_click(click: ApiImageClick) -> ImageClick:

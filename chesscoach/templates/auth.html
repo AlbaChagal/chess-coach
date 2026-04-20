@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block body_class %}auth-page{% endblock %}
+
+{% block content %}
+<main class="auth-shell">
+  <section class="auth-hero">
+    <div class="brand-mark">♞</div>
+    <div class="brand-copy">
+      <h1>ChessCoach</h1>
+      <p>Mobile-first chess analysis with synced sessions and saved work.</p>
+    </div>
+  </section>
+
+  <section class="auth-card">
+    <p class="eyebrow">{{ mode|capitalize }}</p>
+    <h2>{{ auth_heading }}</h2>
+    <p class="auth-subheading">{{ auth_subheading }}</p>
+
+    <form
+      class="auth-form"
+      data-auth-form
+      data-auth-endpoint="{{ auth_endpoint }}"
+      data-redirect-to="/app/analyze"
+      data-mode="{{ mode }}"
+    >
+      <label class="field">
+        <span>Email</span>
+        <input type="email" name="email" autocomplete="email" required>
+      </label>
+
+      <label class="field">
+        <span>Password</span>
+        <input
+          type="password"
+          name="password"
+          autocomplete="{% if mode == 'login' %}current-password{% else %}new-password{% endif %}"
+          required
+        >
+      </label>
+
+      {% if show_confirm_password %}
+      <label class="field">
+        <span>Confirm password</span>
+        <input
+          type="password"
+          name="confirm_password"
+          autocomplete="new-password"
+          required
+        >
+      </label>
+      {% endif %}
+
+      <p class="form-error" data-auth-error hidden></p>
+
+      <button type="submit" class="primary-button" data-auth-submit>
+        {{ submit_label }}
+      </button>
+    </form>
+
+    <p class="auth-switch">
+      <a href="{{ switch_href }}">{{ switch_label }}</a>
+    </p>
+  </section>
+</main>
+{% endblock %}
