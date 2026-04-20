@@ -104,7 +104,7 @@ def test_pipeline_requires_white_king_click() -> None:
 def test_pipeline_requires_side_to_move_before_analysis(monkeypatch) -> None:
     monkeypatch.setattr(
         "chesscoach.pipeline.predict_fen",
-        lambda image: STARTING_PLACEMENT,
+        lambda image, **kwargs: STARTING_PLACEMENT,
     )
 
     result = run_coaching_pipeline(make_request(side_to_move=None))
@@ -120,7 +120,7 @@ def test_pipeline_returns_failed_result_on_board_detection_failure(
 ) -> None:
     monkeypatch.setattr(
         "chesscoach.pipeline.predict_fen",
-        lambda image: (_ for _ in ()).throw(ValueError("bad image")),
+        lambda image, **kwargs: (_ for _ in ()).throw(ValueError("bad image")),
     )
 
     result = run_coaching_pipeline(make_request())
@@ -164,7 +164,7 @@ def test_complete_position_uses_explicit_castling_rights() -> None:
 def test_coaching_result_to_dict_includes_score_display(monkeypatch) -> None:
     monkeypatch.setattr(
         "chesscoach.pipeline.predict_fen",
-        lambda image: STARTING_PLACEMENT,
+        lambda image, **kwargs: STARTING_PLACEMENT,
     )
     monkeypatch.setattr(
         "chesscoach.pipeline.run_analysis",
@@ -181,7 +181,7 @@ def test_pipeline_success_path_runs_analysis_and_skips_explanation(
 ) -> None:
     monkeypatch.setattr(
         "chesscoach.pipeline.predict_fen",
-        lambda image: STARTING_PLACEMENT,
+        lambda image, **kwargs: STARTING_PLACEMENT,
     )
     analysis = make_analysis_result()
     monkeypatch.setattr(
@@ -516,7 +516,7 @@ def test_run_explanation_invalid_played_move_falls_back_to_best_move(
 def test_pipeline_json_includes_structured_explanation(monkeypatch) -> None:
     monkeypatch.setattr(
         "chesscoach.pipeline.predict_fen",
-        lambda image: STARTING_PLACEMENT,
+        lambda image, **kwargs: STARTING_PLACEMENT,
     )
     monkeypatch.setattr(
         "chesscoach.pipeline.run_analysis",
@@ -560,7 +560,7 @@ def test_pipeline_does_not_require_real_engine_when_analysis_mocked(
 ) -> None:
     monkeypatch.setattr(
         "chesscoach.pipeline.predict_fen",
-        lambda image: STARTING_PLACEMENT,
+        lambda image, **kwargs: STARTING_PLACEMENT,
     )
     monkeypatch.setattr(
         "chesscoach.pipeline.run_analysis",

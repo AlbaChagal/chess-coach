@@ -41,11 +41,17 @@ class BoardVision:
         self._classifier = classifier
         self._board_localizer = board_localizer
 
-    def fen_from_image(self, image_path: Path) -> str:
+    def fen_from_image(
+        self,
+        image_path: Path,
+        white_king_start_click: tuple[float, float] | None = None,
+    ) -> str:
         """Return the FEN piece-placement string for the board shown in *image_path*.
 
         Args:
             image_path: Path to a PNG or JPEG image of a chess board.
+            white_king_start_click: Optional raw image click used to orient the
+                board so the white king start square becomes e1 at the bottom.
 
         Returns:
             FEN piece-placement string.
@@ -54,4 +60,9 @@ class BoardVision:
             BoardNotFoundError: If no board is detected in the image.
             ValueError: If the file cannot be read.
         """
-        return predict_fen(image_path, self._classifier, self._board_localizer)
+        return predict_fen(
+            image_path,
+            self._classifier,
+            self._board_localizer,
+            white_king_start_click,
+        )

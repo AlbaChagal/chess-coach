@@ -8,6 +8,8 @@ import logging
 import sys
 from pathlib import Path
 
+import uvicorn
+
 from chesscoach.analysis.coach import ChessCoach
 from chesscoach.analysis.engine import ChessEngine
 from chesscoach.logging_utils import add_logging_args, configure_logging
@@ -31,6 +33,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "image":
         _run_image_command(args)
+        return
+    if args.command == "serve":
+        _run_serve_command(args)
         return
     raise SystemExit(2)
 
@@ -108,6 +113,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Emit machine-readable JSON to stdout.",
     )
     add_logging_args(image_parser)
+
+    serve_parser = subparsers.add_parser("serve", help="Run the HTTP API.")
+    serve_parser.add_argument("--host", default="127.0.0.1")
+    serve_parser.add_argument("--port", type=int, default=8000)
+    serve_parser.add_argument(
+        "--reload",
+        action="store_true",
+        help="Enable auto-reload for local development.",
+    )
+    add_logging_args(serve_parser)
     return parser
 
 
@@ -157,6 +172,18 @@ def _run_image_command(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def _run_serve_command(args: argparse.Namespace) -> None:
+    """Run the ChessCoach HTTP server for local/mobile testing."""
+    uvicorn.run(
+        "chesscoach.server:create_app",
+        factory=True,
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        log_level=args.log_level.lower(),
+    )
+
+
 def _print_human_readable_result(result) -> None:
     print(f"Status: {result.status}")
     if result.user_action_required is not None:
@@ -199,8 +226,7 @@ def _print_human_readable_result(result) -> None:
             print(f"Threat: {structured.what_it_threatens}")
             print(f"Why best: {structured.why_it_is_best}")
             print(
-                f"Why alternatives are worse: "
-                f"{structured.why_alternatives_are_worse}"
+                f"Why alternatives are worse: {structured.why_alternatives_are_worse}"
             )
             if structured.tactical_themes:
                 print(f"Tactical themes: {', '.join(structured.tactical_themes)}")
@@ -239,7 +265,7 @@ def _print_human_readable_result(result) -> None:
 def _normalize_legacy_argv(argv: list[str]) -> list[str]:
     if not argv:
         return ["fen"]
-    if argv[0] not in {"fen", "image"}:
+    if argv[0] not in {"fen", "image", "serve"}:
         return ["fen", *argv]
     return argv
 

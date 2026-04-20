@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, fields, is_dataclass
 from pathlib import Path
 from typing import Any
 from typing import cast
@@ -74,7 +74,13 @@ def run_vision(request: CoachingRequest) -> tuple[VisionResult, list[PipelineWar
         )
 
     try:
-        fen_placement = predict_fen(_coerce_image_input(request.image))
+        fen_placement = predict_fen(
+            _coerce_image_input(request.image),
+            white_king_start_click=(
+                request.white_king_start_click.x,
+                request.white_king_start_click.y,
+            ),
+        )
     except (BoardNotFoundError, ValueError):
         return (
             VisionResult(
@@ -216,7 +222,9 @@ def run_explanation(
             structured = explainer.build_structured_explanation(explained)
         else:
             try:
-                explained = explainer.analyze_move(position.fen, request.played_move_uci)
+                explained = explainer.analyze_move(
+                    position.fen, request.played_move_uci
+                )
                 structured = explainer.build_structured_played_move_explanation(
                     explained
                 )
@@ -431,7 +439,7 @@ def run_coaching_pipeline(request: CoachingRequest) -> CoachingResult:
 
 def coaching_result_to_dict(result: CoachingResult) -> dict[str, Any]:
     """Convert a coaching result into a JSON-serializable dictionary."""
-    payload = _serialize_dataclass(result)
+    payload = serialize_pipeline_value(result)
     analysis = payload.get("analysis")
     if analysis is not None:
         top_moves = analysis.get("top_moves", [])
@@ -440,6 +448,11 @@ def coaching_result_to_dict(result: CoachingResult) -> dict[str, Any]:
             for move in top_moves
         ]
     return payload
+
+
+def serialize_pipeline_value(value: Any) -> Any:
+    """Convert pipeline dataclasses and models into JSON-serializable values."""
+    return _serialize_dataclass(value)
 
 
 def _coerce_image_input(image: Path | bytes) -> Path | bytes:
@@ -538,8 +551,8 @@ def _serialize_dataclass(value: Any) -> Any:
     if is_dataclass(value):
         dataclass_value = cast(Any, value)
         return {
-            field_name: _serialize_dataclass(field_value)
-            for field_name, field_value in asdict(dataclass_value).items()
+            field.name: _serialize_dataclass(getattr(dataclass_value, field.name))
+            for field in fields(dataclass_value)
         }
     if isinstance(value, list):
         return [_serialize_dataclass(item) for item in value]

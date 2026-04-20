@@ -317,3 +317,26 @@ def test_image_subcommand_failure_exits(capsys, monkeypatch) -> None:
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "board_detection_low_confidence" in captured.out
+
+
+def test_serve_subcommand_runs_uvicorn(monkeypatch) -> None:
+    captured = {}
+
+    def _run(*args, **kwargs) -> None:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr("chesscoach.cli.uvicorn.run", _run)
+
+    from chesscoach.cli import main
+
+    main(["serve", "--host", "0.0.0.0", "--port", "9000", "--reload"])
+
+    assert captured["args"] == ("chesscoach.server:create_app",)
+    assert captured["kwargs"] == {
+        "factory": True,
+        "host": "0.0.0.0",
+        "port": 9000,
+        "reload": True,
+        "log_level": "info",
+    }

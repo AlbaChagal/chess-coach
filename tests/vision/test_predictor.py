@@ -10,6 +10,11 @@ import pytest
 from PIL import Image as PILImage
 
 from chesscoach.vision import BoardNotFoundError, predict_fen
+from chesscoach.vision.board_detector import (
+    BOARD_SIZE,
+    DEFAULT_WARP_MARGIN_RATIO,
+    canonical_board_corners,
+)
 from chesscoach.vision.piece_classifier import PieceClassifier
 from chesscoach.vision.piece_detector import PieceDetector
 from tests.vision.conftest import make_synthetic_board
@@ -92,8 +97,10 @@ def test_predict_fen_uses_default_board_localizer_when_available(
     monkeypatch,
     board_bytes: bytes,
 ) -> None:
+    from chesscoach.vision.piece_assignment import PieceDetection
+
     class _Detector:
-        def detect(self, image: np.ndarray) -> list[object]:
+        def detect(self, image: np.ndarray) -> list[PieceDetection]:
             _ = image
             return []
 
@@ -119,6 +126,34 @@ def test_predict_fen_uses_default_board_localizer_when_available(
 
     assert fen == "8/8/8/8/8/8/8/8"
     assert len(localizer_calls) == 1
+
+
+@pytest.mark.parametrize("rotation_shift", [0, 1, 2, 3])
+def test_orients_board_corners_from_white_king_click(rotation_shift: int) -> None:
+    from chesscoach.vision import predictor as predictor_module
+
+    board_corners = np.array(
+        [[0.0, 0.0], [255.0, 0.0], [255.0, 255.0], [0.0, 255.0]],
+        dtype=np.float32,
+    )
+    rotated_corners = np.roll(board_corners, shift=rotation_shift, axis=0)
+    destination_corners = canonical_board_corners(
+        BOARD_SIZE,
+        margin_ratio=DEFAULT_WARP_MARGIN_RATIO,
+    )
+    inverse_homography = cv2.getPerspectiveTransform(
+        destination_corners.astype(np.float32),
+        rotated_corners.astype(np.float32),
+    )
+    e1_center = np.array([[predictor_module._e1_square_center()]], dtype=np.float32)
+    click_point = cv2.perspectiveTransform(e1_center, inverse_homography)[0][0]
+
+    oriented = predictor_module._orient_board_corners_from_white_king_click(
+        board_corners,
+        (float(click_point[0]), float(click_point[1])),
+    )
+
+    assert np.allclose(oriented, rotated_corners)
 
 
 def test_output_has_seven_slashes(board_bytes: bytes, stub: PieceClassifier) -> None:
