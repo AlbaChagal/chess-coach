@@ -20,7 +20,9 @@ from chesscoach.auth import (
     DEFAULT_SESSION_COOKIE,
     AuthError,
     AuthStore,
+    SavedSnapshotRecord,
     UserRecord,
+    UserSettingsRecord,
     create_auth_store,
     decode_session_cookie,
     encode_session_cookie,
@@ -126,6 +128,18 @@ class LoginRequest(BaseModel):
 
     email: str
     password: str
+
+
+class SavedSnapshotApiRequest(BaseModel):
+    """Request body for creating a saved analysis snapshot."""
+
+    snapshot: dict[str, object]
+
+
+class SettingsApiRequest(BaseModel):
+    """Request body for synced user settings."""
+
+    show_coordinates: bool
 
 
 def create_app() -> FastAPI:
@@ -234,6 +248,7 @@ def create_app() -> FastAPI:
         user = _current_user_from_request(request, app.state.auth_store)
         if user is None:
             raise HTTPException(status_code=401, detail="Not authenticated.")
+        settings = app.state.auth_store.get_user_settings(user.id)
         return JSONResponse(
             {
                 "status": "success",
@@ -242,6 +257,7 @@ def create_app() -> FastAPI:
                     "email": user.email,
                     "created_at": user.created_at,
                 },
+                "settings": _serialize_user_settings(settings),
             }
         )
 
@@ -272,9 +288,7 @@ def create_app() -> FastAPI:
                 active_tab="analyze",
                 page_title="Analyze",
                 heading="Analyze",
-                subheading=(
-                    "Phase 2 will start the image upload and board-orientation flow here."
-                ),
+                subheading="Load a board image, review analysis, and save synced snapshots.",
                 user=user,
                 body_variant="analyze",
             ),
@@ -293,9 +307,7 @@ def create_app() -> FastAPI:
                 active_tab="saved",
                 page_title="Saved",
                 heading="Saved Positions",
-                subheading=(
-                    "Synced analysis snapshots will appear here once save flows are implemented."
-                ),
+                subheading="Open and manage your synced analysis snapshots.",
                 user=user,
                 body_variant="saved",
             ),
@@ -319,6 +331,92 @@ def create_app() -> FastAPI:
                 body_variant="profile",
             ),
         )
+
+    @app.get("/api/settings")
+    def settings(request: Request) -> JSONResponse:
+        """Return synced settings for the authenticated user."""
+        user = _require_authenticated_user(request, app.state.auth_store)
+        settings_record = app.state.auth_store.get_user_settings(user.id)
+        return JSONResponse(
+            {
+                "status": "success",
+                "settings": _serialize_user_settings(settings_record),
+            }
+        )
+
+    @app.post("/api/settings")
+    def update_settings(
+        request: Request,
+        payload: SettingsApiRequest,
+    ) -> JSONResponse:
+        """Persist synced settings for the authenticated user."""
+        user = _require_authenticated_user(request, app.state.auth_store)
+        settings_record = app.state.auth_store.update_user_settings(
+            user.id,
+            show_coordinates=payload.show_coordinates,
+        )
+        return JSONResponse(
+            {
+                "status": "success",
+                "settings": _serialize_user_settings(settings_record),
+            }
+        )
+
+    @app.get("/api/saved")
+    def list_saved(request: Request) -> JSONResponse:
+        """List saved analysis snapshots for the authenticated user."""
+        user = _require_authenticated_user(request, app.state.auth_store)
+        snapshots = app.state.auth_store.list_saved_snapshots(user.id)
+        return JSONResponse(
+            {
+                "status": "success",
+                "snapshots": serialize_pipeline_value(snapshots),
+            }
+        )
+
+    @app.post("/api/saved")
+    def create_saved(
+        request: Request,
+        payload: SavedSnapshotApiRequest,
+    ) -> JSONResponse:
+        """Persist a saved analysis snapshot for the authenticated user."""
+        user = _require_authenticated_user(request, app.state.auth_store)
+        try:
+            snapshot = app.state.auth_store.create_saved_snapshot(
+                user.id,
+                snapshot=payload.snapshot,
+            )
+        except AuthError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return JSONResponse(
+            {
+                "status": "success",
+                "snapshot": _serialize_saved_snapshot_record(snapshot),
+            }
+        )
+
+    @app.get("/api/saved/{snapshot_id}")
+    def get_saved(snapshot_id: int, request: Request) -> JSONResponse:
+        """Return one saved snapshot for the authenticated user."""
+        user = _require_authenticated_user(request, app.state.auth_store)
+        snapshot = app.state.auth_store.get_saved_snapshot(user.id, snapshot_id)
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="Saved snapshot not found.")
+        return JSONResponse(
+            {
+                "status": "success",
+                "snapshot": _serialize_saved_snapshot_record(snapshot),
+            }
+        )
+
+    @app.delete("/api/saved/{snapshot_id}")
+    def delete_saved(snapshot_id: int, request: Request) -> JSONResponse:
+        """Delete one saved snapshot for the authenticated user."""
+        user = _require_authenticated_user(request, app.state.auth_store)
+        deleted = app.state.auth_store.delete_saved_snapshot(user.id, snapshot_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Saved snapshot not found.")
+        return JSONResponse({"status": "success", "deleted": True})
 
     @app.post("/vision")
     def vision(payload: VisionApiRequest) -> dict[str, object]:
@@ -489,6 +587,16 @@ def _current_user_from_request(
     return store.get_user_by_id(user_id)
 
 
+def _require_authenticated_user(
+    request: Request,
+    store: AuthStore,
+) -> UserRecord:
+    user = _current_user_from_request(request, store)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    return user
+
+
 def _shell_context(
     *,
     active_tab: str,
@@ -505,6 +613,24 @@ def _shell_context(
         "subheading": subheading,
         "user": user,
         "body_variant": body_variant,
+    }
+
+
+def _serialize_user_settings(settings: UserSettingsRecord) -> dict[str, object]:
+    return {
+        "show_coordinates": settings.show_coordinates,
+    }
+
+
+def _serialize_saved_snapshot_record(
+    snapshot: SavedSnapshotRecord,
+) -> dict[str, object]:
+    return {
+        "id": snapshot.id,
+        "created_at": snapshot.created_at,
+        "updated_at": snapshot.updated_at,
+        "summary": serialize_pipeline_value(snapshot.summary),
+        "snapshot": snapshot.snapshot,
     }
 
 

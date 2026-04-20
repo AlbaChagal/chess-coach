@@ -22,6 +22,10 @@
       data-vision-endpoint="/vision"
       data-complete-endpoint="/complete-position"
       data-analyze-endpoint="/analyze"
+      data-explain-endpoint="/explain"
+      data-save-endpoint="/api/saved"
+      data-settings-endpoint="/api/settings"
+      data-saved-endpoint-base="/api/saved"
     >
       <div class="step-indicator">
         <span class="step-pill active" data-step-pill="upload">1. Image</span>
@@ -192,9 +196,17 @@
               continuations.
             </p>
           </div>
-          <button class="secondary-link" data-analysis-flip-button>
-            Flip Board
-          </button>
+          <div class="analysis-header-actions">
+            <button class="secondary-link" data-save-button>
+              Save Position
+            </button>
+            <button class="secondary-link" data-delete-saved-button hidden>
+              Delete Saved Position
+            </button>
+            <button class="secondary-link" data-analysis-flip-button>
+              Flip Board
+            </button>
+          </div>
         </div>
 
         <div class="analysis-loading" data-analysis-loading hidden>
@@ -202,6 +214,7 @@
         </div>
 
         <p class="form-error" data-analysis-error hidden></p>
+        <p class="save-feedback" data-save-feedback hidden></p>
 
         <div class="analysis-layout" data-analysis-layout hidden>
           <div class="board-panel">
@@ -249,24 +262,132 @@
             <div class="line-list" data-line-list></div>
           </div>
         </div>
+
+        <section class="insights-panel" data-insights-panel hidden>
+          <div class="analysis-lines-header">
+            <div>
+              <h3>Insights</h3>
+              <p class="screen-subheading">
+                Request an explanation for the best move or compare what you
+                actually played.
+              </p>
+            </div>
+          </div>
+
+          <div class="insight-actions">
+            <button class="primary-button" data-explain-best-button>
+              Explain Best Move
+            </button>
+          </div>
+
+          <form class="played-move-form" data-played-move-form>
+            <div class="played-move-grid">
+              <label class="field">
+                <span>From</span>
+                <select data-played-from-select>
+                  <option value="">Choose square</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>To</span>
+                <select data-played-to-select>
+                  <option value="">Choose square</option>
+                </select>
+              </label>
+            </div>
+            <label class="field">
+              <span>Promotion</span>
+              <select data-played-promotion-select>
+                <option value="">No promotion</option>
+                <option value="q">Queen</option>
+                <option value="r">Rook</option>
+                <option value="b">Bishop</option>
+                <option value="n">Knight</option>
+              </select>
+            </label>
+            <div class="step-actions compact-actions">
+              <button class="secondary-link" type="submit" data-compare-move-button>
+                Compare My Move
+              </button>
+            </div>
+          </form>
+
+          <div class="analysis-loading" data-explanation-loading hidden>
+            Requesting insight...
+          </div>
+
+          <p class="form-error" data-explanation-error hidden></p>
+          <div class="warning-stack" data-explanation-warnings hidden></div>
+
+          <section class="insight-result" data-explanation-result hidden>
+            <div class="insight-summary" data-explanation-summary-block hidden>
+              <div class="summary-row">
+                <span>Move</span>
+                <strong data-explanation-move-label>-</strong>
+              </div>
+              <p class="insight-text" data-explanation-text hidden></p>
+            </div>
+
+            <div class="played-move-result" data-played-move-result hidden>
+              <div class="summary-row">
+                <span>Played Move</span>
+                <strong data-played-move-label>-</strong>
+              </div>
+              <div class="summary-row">
+                <span>Quality</span>
+                <strong data-played-move-quality>-</strong>
+              </div>
+              <div class="summary-row">
+                <span>Centipawn Loss</span>
+                <strong data-played-move-loss>-</strong>
+              </div>
+            </div>
+
+            <div class="comparison-card" data-best-move-comparison hidden>
+              <h4>Best vs Played</h4>
+              <p class="insight-text" data-comparison-summary></p>
+            </div>
+
+            <details class="structured-details" data-structured-details>
+              <summary>Show Structured Breakdown</summary>
+              <div class="structured-content" data-structured-content></div>
+            </details>
+          </section>
+        </section>
       </section>
     </div>
     {% elif body_variant == "saved" %}
-    <div class="placeholder-block">
-      <div class="placeholder-illustration saved-stage"></div>
-      <h2>Saved Snapshots Coming Next</h2>
-      <p>
-        Synced full-analysis snapshots will live here once save flows and
-        account-bound history are implemented.
-      </p>
-      <ul class="feature-list">
-        <li>Account-tied saved positions</li>
-        <li>Snapshot reopening</li>
-        <li>Future dedicated library/history tab</li>
-      </ul>
-    </div>
+    <section
+      class="saved-shell"
+      data-saved-app
+      data-saved-endpoint="/api/saved"
+      data-open-base="/app/analyze?saved="
+    >
+      <div class="saved-header">
+        <div>
+          <h2>Saved Positions</h2>
+          <p class="screen-subheading">
+            Reopen your account-tied analysis snapshots from here.
+          </p>
+        </div>
+        <a href="/app/analyze" class="secondary-link">Analyze New Position</a>
+      </div>
+      <div class="analysis-loading" data-saved-loading>
+        Loading saved positions...
+      </div>
+      <p class="form-error" data-saved-error hidden></p>
+      <div class="saved-empty" data-saved-empty hidden>
+        <div class="placeholder-illustration saved-stage"></div>
+        <h3>No saved positions yet</h3>
+        <p>
+          Save an analysis snapshot from the Analyze screen to build your
+          history.
+        </p>
+      </div>
+      <div class="saved-list" data-saved-list hidden></div>
+    </section>
     {% else %}
-    <div class="profile-stack">
+    <div class="profile-stack" data-profile-app data-settings-endpoint="/api/settings">
       <section class="profile-card">
         <h2>Account</h2>
         <p class="profile-email">{{ user.email }}</p>
@@ -275,34 +396,21 @@
       <section class="profile-card">
         <h2>Display Settings</h2>
         <div class="setting-row">
-          <span>Board Style</span>
-          <select disabled>
-            <option selected>Classic Wood</option>
-          </select>
-        </div>
-        <div class="setting-row">
-          <span>Show Legal Moves</span>
-          <label class="switch">
-            <input type="checkbox" checked disabled>
-            <span class="switch-track"></span>
-          </label>
-        </div>
-        <div class="setting-row">
           <span>Coordinates Display</span>
           <label class="switch">
             <input type="checkbox" checked data-setting-input="showCoordinates">
             <span class="switch-track"></span>
           </label>
         </div>
-        <p class="setting-note">
-          Coordinates display now affects the analysis board. Other settings
-          will become live app preferences in later phases.
+        <p class="setting-note" data-settings-status>
+          Coordinates display affects the analysis board and now syncs to your
+          account.
         </p>
       </section>
 
       <section class="profile-card">
         <h2>Saved Positions</h2>
-        <p>Saved analysis snapshots will sync to this account.</p>
+        <p>Open your synced analysis snapshots.</p>
         <a href="/app/saved" class="secondary-link">Open Saved</a>
       </section>
 

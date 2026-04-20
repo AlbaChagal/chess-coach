@@ -36,6 +36,42 @@
     window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
   }
 
+  async function fetchSyncedSettings(endpoint) {
+    const response = await fetch(endpoint, {
+      method: "GET",
+      credentials: "same-origin",
+    });
+    const payload = await response.json();
+    if (!response.ok || payload.status !== "success") {
+      throw new Error(payload.detail || "Unable to load settings.");
+    }
+    const settings = {
+      showCoordinates: payload.settings.show_coordinates,
+    };
+    saveSettings(settings);
+    return settings;
+  }
+
+  async function persistSyncedSettings(endpoint, settings) {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({
+        show_coordinates: settings.showCoordinates,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok || payload.status !== "success") {
+      throw new Error(payload.detail || "Unable to save settings.");
+    }
+    const nextSettings = {
+      showCoordinates: payload.settings.show_coordinates,
+    };
+    saveSettings(nextSettings);
+    return nextSettings;
+  }
+
   async function handleAuthFormSubmit(event) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -104,20 +140,18 @@
     }
   }
 
-  function setupSettingsForm() {
-    const settings = loadSettings();
-    document.querySelectorAll("[data-setting-input]").forEach((input) => {
-      if (input.dataset.settingInput === "showCoordinates") {
-        input.checked = settings.showCoordinates;
-      }
-      input.addEventListener("change", () => {
-        const nextSettings = {
-          ...loadSettings(),
-          [input.dataset.settingInput]: input.checked,
-        };
-        saveSettings(nextSettings);
-      });
-    });
+  function createExplanationState() {
+    return {
+      status: "idle",
+      mode: null,
+      playedMove: {
+        from: "",
+        to: "",
+        promotion: "",
+      },
+      result: null,
+      warnings: [],
+    };
   }
 
   function createAnalyzeState() {
@@ -131,6 +165,7 @@
       sideToMove: null,
       completedPosition: null,
       flipped: false,
+      savedSnapshotId: null,
       analysis: {
         status: "idle",
         result: null,
@@ -138,6 +173,7 @@
         stepIndex: 0,
         flipped: false,
       },
+      explanation: createExplanationState(),
     };
   }
 
@@ -157,7 +193,9 @@
     const payload = {
       step: state.step,
       completedPosition: state.completedPosition,
+      savedSnapshotId: state.savedSnapshotId,
       analysis: state.analysis,
+      explanation: state.explanation,
     };
     window.sessionStorage.setItem(ANALYZE_STORAGE_KEY, JSON.stringify(payload));
   }
@@ -166,15 +204,135 @@
     window.sessionStorage.removeItem(ANALYZE_STORAGE_KEY);
   }
 
+  function setupProfileApp(root) {
+    const settingsEndpoint = root.dataset.settingsEndpoint;
+    const showCoordinatesInput = root.querySelector(
+      '[data-setting-input="showCoordinates"]'
+    );
+    const statusTarget = root.querySelector("[data-settings-status]");
+    if (!showCoordinatesInput || !settingsEndpoint) {
+      return;
+    }
+
+    async function loadProfileSettings() {
+      statusTarget.textContent = "Loading synced settings...";
+      try {
+        const settings = await fetchSyncedSettings(settingsEndpoint);
+        showCoordinatesInput.checked = settings.showCoordinates;
+        statusTarget.textContent =
+          "Coordinates display affects the analysis board and syncs to your account.";
+      } catch (_error) {
+        const cached = loadSettings();
+        showCoordinatesInput.checked = cached.showCoordinates;
+        statusTarget.textContent =
+          "Unable to load synced settings right now. Showing your local preference.";
+      }
+    }
+
+    showCoordinatesInput.addEventListener("change", async () => {
+      const nextSettings = {
+        ...loadSettings(),
+        showCoordinates: showCoordinatesInput.checked,
+      };
+      saveSettings(nextSettings);
+      statusTarget.textContent = "Saving setting...";
+      try {
+        await persistSyncedSettings(settingsEndpoint, nextSettings);
+        statusTarget.textContent =
+          "Coordinates display affects the analysis board and syncs to your account.";
+      } catch (_error) {
+        statusTarget.textContent =
+          "Unable to sync settings right now. Your local preference was kept.";
+      }
+    });
+
+    loadProfileSettings();
+  }
+
+  function setupSavedApp(root) {
+    const savedEndpoint = root.dataset.savedEndpoint;
+    const openBase = root.dataset.openBase || "/app/analyze?saved=";
+    const loading = root.querySelector("[data-saved-loading]");
+    const error = root.querySelector("[data-saved-error]");
+    const empty = root.querySelector("[data-saved-empty]");
+    const list = root.querySelector("[data-saved-list]");
+
+    async function loadSavedSnapshots() {
+      loading.hidden = false;
+      list.hidden = true;
+      empty.hidden = true;
+      clearError(error);
+      try {
+        const response = await fetch(savedEndpoint, {
+          method: "GET",
+          credentials: "same-origin",
+        });
+        const payload = await response.json();
+        if (!response.ok || payload.status !== "success") {
+          showError(error, payload.detail || "Unable to load saved positions.");
+          return;
+        }
+        renderSavedList(payload.snapshots || []);
+      } catch (_error) {
+        showError(error, "Unable to load saved positions right now.");
+      } finally {
+        loading.hidden = true;
+      }
+    }
+
+    function renderSavedList(snapshots) {
+      list.innerHTML = "";
+      if (snapshots.length === 0) {
+        empty.hidden = false;
+        list.hidden = true;
+        return;
+      }
+      empty.hidden = true;
+      list.hidden = false;
+      snapshots.forEach((snapshot) => {
+        const item = document.createElement("a");
+        item.className = "saved-card";
+        item.href = `${openBase}${snapshot.id}`;
+        item.innerHTML = `
+          <div class="saved-card-head">
+            <div>
+              <strong>${snapshot.best_move_san || "Saved Position"}</strong>
+              <p>${snapshot.best_move_score_display || "No score available"}</p>
+            </div>
+            <span>${formatSavedDate(snapshot.updated_at)}</span>
+          </div>
+          <div class="saved-card-meta">
+            <span>${snapshot.side_to_move === "w" ? "White" : "Black"} to move</span>
+            <span>${snapshot.has_explanation ? "Explained" : "Analysis only"}</span>
+            <span>${snapshot.has_coaching ? "Coached" : "No coaching"}</span>
+          </div>
+          <code>${snapshot.fen}</code>
+        `;
+        list.appendChild(item);
+      });
+    }
+
+    loadSavedSnapshots();
+  }
+
   function setupAnalyzeFlow(root) {
     const state = createAnalyzeState();
     const restored = restoreAnalyzeState();
     if (restored) {
       state.step = restored.step || state.step;
       state.completedPosition = restored.completedPosition || null;
+      state.savedSnapshotId = restored.savedSnapshotId || null;
       state.analysis = {
         ...state.analysis,
         ...(restored.analysis || {}),
+      };
+      state.explanation = {
+        ...state.explanation,
+        ...(restored.explanation || {}),
+        playedMove: {
+          ...state.explanation.playedMove,
+          ...((restored.explanation && restored.explanation.playedMove) || {}),
+        },
       };
       if (!state.completedPosition && state.step !== "upload") {
         state.step = "upload";
@@ -185,6 +343,11 @@
     const visionEndpoint = root.dataset.visionEndpoint;
     const completeEndpoint = root.dataset.completeEndpoint;
     const analyzeEndpoint = root.dataset.analyzeEndpoint;
+    const explainEndpoint = root.dataset.explainEndpoint;
+    const saveEndpoint = root.dataset.saveEndpoint;
+    const settingsEndpoint = root.dataset.settingsEndpoint;
+    const savedEndpointBase = root.dataset.savedEndpointBase;
+    const requestedSavedId = new URLSearchParams(window.location.search).get("saved");
 
     const stepSections = Array.from(root.querySelectorAll("[data-step]"));
     const stepPills = Array.from(root.querySelectorAll("[data-step-pill]"));
@@ -194,6 +357,7 @@
     const detectError = root.querySelector("[data-detect-error]");
     const completeError = root.querySelector("[data-complete-error]");
     const analysisError = root.querySelector("[data-analysis-error]");
+    const saveFeedback = root.querySelector("[data-save-feedback]");
     const previewCard = root.querySelector("[data-image-preview-card]");
     const previewImage = root.querySelector("[data-image-preview]");
     const stageImage = root.querySelector("[data-stage-image]");
@@ -230,6 +394,34 @@
     const analysisRetryButton = root.querySelector("[data-analysis-retry-button]");
     const analysisStepNote = root.querySelector("[data-analysis-step-note]");
     const lineList = root.querySelector("[data-line-list]");
+    const saveButton = root.querySelector("[data-save-button]");
+    const deleteSavedButton = root.querySelector("[data-delete-saved-button]");
+    const insightsPanel = root.querySelector("[data-insights-panel]");
+    const explainBestButton = root.querySelector("[data-explain-best-button]");
+    const playedMoveForm = root.querySelector("[data-played-move-form]");
+    const playedFromSelect = root.querySelector("[data-played-from-select]");
+    const playedToSelect = root.querySelector("[data-played-to-select]");
+    const playedPromotionSelect = root.querySelector(
+      "[data-played-promotion-select]"
+    );
+    const compareMoveButton = root.querySelector("[data-compare-move-button]");
+    const explanationLoading = root.querySelector("[data-explanation-loading]");
+    const explanationError = root.querySelector("[data-explanation-error]");
+    const explanationWarnings = root.querySelector("[data-explanation-warnings]");
+    const explanationResult = root.querySelector("[data-explanation-result]");
+    const explanationSummaryBlock = root.querySelector(
+      "[data-explanation-summary-block]"
+    );
+    const explanationMoveLabel = root.querySelector("[data-explanation-move-label]");
+    const explanationText = root.querySelector("[data-explanation-text]");
+    const playedMoveResult = root.querySelector("[data-played-move-result]");
+    const playedMoveLabel = root.querySelector("[data-played-move-label]");
+    const playedMoveQuality = root.querySelector("[data-played-move-quality]");
+    const playedMoveLoss = root.querySelector("[data-played-move-loss]");
+    const bestMoveComparison = root.querySelector("[data-best-move-comparison]");
+    const comparisonSummary = root.querySelector("[data-comparison-summary]");
+    const structuredDetails = root.querySelector("[data-structured-details]");
+    const structuredContent = root.querySelector("[data-structured-content]");
 
     let boardWidget = null;
     let boardShowNotation = null;
@@ -310,7 +502,14 @@
         continueToAnalysisButton.disabled = true;
       }
 
+      saveButton.hidden = state.savedSnapshotId !== null;
+      deleteSavedButton.hidden = state.savedSnapshotId === null;
+      playedFromSelect.value = state.explanation.playedMove.from;
+      playedToSelect.value = state.explanation.playedMove.to;
+      playedPromotionSelect.value = state.explanation.playedMove.promotion;
+
       renderAnalysisState();
+      renderExplanationState();
       persistAnalyzeState(state);
     }
 
@@ -333,26 +532,201 @@
       renderPlaybackControls();
     }
 
+    function renderExplanationState() {
+      const explanation = state.explanation;
+      const hasAnalysis = state.analysis.status === "success" && !!state.analysis.result;
+      insightsPanel.hidden = !hasAnalysis;
+      explanationLoading.hidden = explanation.status !== "loading";
+      explanationResult.hidden =
+        explanation.status !== "success" || explanation.result === null;
+      if (explanation.status !== "failed") {
+        clearError(explanationError);
+      }
+
+      explainBestButton.disabled = explanation.status === "loading";
+      compareMoveButton.disabled =
+        explanation.status === "loading" || playedMoveUci() === null;
+
+      renderWarnings(explanationWarnings, explanation.warnings || []);
+
+      if (explanation.status !== "success" || !explanation.result) {
+        explanationSummaryBlock.hidden = true;
+        playedMoveResult.hidden = true;
+        bestMoveComparison.hidden = true;
+        structuredDetails.hidden = true;
+        return;
+      }
+
+      const result = explanation.result;
+      const moveLabel =
+        result.move_san && result.move_uci
+          ? `${result.move_san} (${result.move_uci})`
+          : result.move_san || result.move_uci || "Best move";
+      explanationSummaryBlock.hidden = false;
+      explanationMoveLabel.textContent = moveLabel;
+
+      if (result.explanation_text) {
+        explanationText.hidden = false;
+        explanationText.textContent = result.explanation_text;
+      } else {
+        explanationText.hidden = true;
+        explanationText.textContent = "";
+      }
+
+      if (result.played_move_result) {
+        playedMoveResult.hidden = false;
+        playedMoveLabel.textContent =
+          `${result.played_move_result.move_san} (${result.played_move_result.move_uci})`;
+        playedMoveQuality.textContent =
+          `${result.played_move_result.quality_emoji} ` +
+          `${result.played_move_result.quality_label}`;
+        playedMoveLoss.textContent = String(result.played_move_result.cp_loss);
+      } else {
+        playedMoveResult.hidden = true;
+      }
+
+      if (result.comparison) {
+        bestMoveComparison.hidden = false;
+        comparisonSummary.textContent =
+          `${result.comparison.best_move_san} ` +
+          `(${result.comparison.best_move_score_display}) was stronger than ` +
+          `${result.comparison.played_move_san}. ` +
+          `${result.comparison.why_best_move_is_better}`;
+      } else {
+        bestMoveComparison.hidden = true;
+        comparisonSummary.textContent = "";
+      }
+
+      renderStructuredExplanation(result.structured_explanation);
+    }
+
+    function renderWarnings(target, warnings) {
+      target.innerHTML = "";
+      target.hidden = warnings.length === 0;
+      warnings.forEach((warning) => {
+        const item = document.createElement("div");
+        item.className = "warning-card";
+        item.innerHTML = `<strong>${warning.code}</strong><p>${warning.message}</p>`;
+        target.appendChild(item);
+      });
+    }
+
+    function renderStructuredExplanation(structured) {
+      structuredContent.innerHTML = "";
+      structuredDetails.open = false;
+      if (!structured) {
+        structuredDetails.hidden = true;
+        return;
+      }
+      structuredDetails.hidden = false;
+
+      appendStructuredSection("Summary", structured.summary);
+      if ("what_the_move_does" in structured) {
+        appendStructuredSection("What The Move Does", structured.what_the_move_does);
+        appendStructuredSection("What It Threatens", structured.what_it_threatens);
+        appendStructuredSection("Why It Is Best", structured.why_it_is_best);
+        appendStructuredSection(
+          "Why Alternatives Are Worse",
+          structured.why_alternatives_are_worse
+        );
+      } else {
+        appendStructuredSection(
+          "What The Move Tried To Do",
+          structured.what_the_move_tried_to_do
+        );
+        appendStructuredSection("What Was Missed", structured.what_was_missed);
+        appendStructuredSection(
+          "What Changed After Move",
+          structured.what_changed_after_move
+        );
+        appendStructuredSection(
+          "Why Best Move Was Better",
+          structured.why_best_move_was_better
+        );
+        appendStructuredSection("Practical Lesson", structured.practical_lesson);
+      }
+
+      if (structured.tactical_themes && structured.tactical_themes.length > 0) {
+        appendStructuredList("Tactical Themes", structured.tactical_themes);
+      }
+      if (structured.alternatives && structured.alternatives.length > 0) {
+        appendStructuredAlternatives("Alternatives", structured.alternatives);
+      }
+    }
+
+    function appendStructuredSection(title, body) {
+      const section = document.createElement("section");
+      section.className = "structured-section";
+      section.innerHTML = `<h4>${title}</h4><p class="insight-text">${body}</p>`;
+      structuredContent.appendChild(section);
+    }
+
+    function appendStructuredList(title, items) {
+      const section = document.createElement("section");
+      section.className = "structured-section";
+      const heading = document.createElement("h4");
+      heading.textContent = title;
+      const list = document.createElement("ul");
+      list.className = "feature-list structured-list";
+      items.forEach((item) => {
+        const listItem = document.createElement("li");
+        listItem.textContent = item;
+        list.appendChild(listItem);
+      });
+      section.appendChild(heading);
+      section.appendChild(list);
+      structuredContent.appendChild(section);
+    }
+
+    function appendStructuredAlternatives(title, alternatives) {
+      const section = document.createElement("section");
+      section.className = "structured-section";
+      const heading = document.createElement("h4");
+      heading.textContent = title;
+      section.appendChild(heading);
+      alternatives.forEach((alternative) => {
+        const card = document.createElement("div");
+        card.className = "alternative-card";
+        card.innerHTML = `
+          <div class="line-card-head">
+            <span class="line-card-move">${alternative.move_san}</span>
+            <span class="line-card-score">${alternative.score_display}</span>
+          </div>
+          <p class="insight-text">${alternative.reason}</p>
+        `;
+        section.appendChild(card);
+      });
+      structuredContent.appendChild(section);
+    }
+
     function resetToUpload() {
-      state.step = "upload";
-      state.imageFile = null;
-      state.imageDataUrl = "";
-      state.detection = null;
-      state.selectedClick = null;
-      state.selectedSquare = null;
-      state.sideToMove = null;
-      state.completedPosition = null;
-      state.flipped = false;
-      state.analysis = createAnalyzeState().analysis;
+      const nextState = createAnalyzeState();
+      state.step = nextState.step;
+      state.imageFile = nextState.imageFile;
+      state.imageDataUrl = nextState.imageDataUrl;
+      state.detection = nextState.detection;
+      state.selectedClick = nextState.selectedClick;
+      state.selectedSquare = nextState.selectedSquare;
+      state.sideToMove = nextState.sideToMove;
+      state.completedPosition = nextState.completedPosition;
+      state.flipped = nextState.flipped;
+      state.savedSnapshotId = nextState.savedSnapshotId;
+      state.analysis = nextState.analysis;
+      state.explanation = nextState.explanation;
       clearError(uploadError);
       clearError(detectError);
       clearError(completeError);
       clearError(analysisError);
+      clearError(explanationError);
+      clearError(saveFeedback);
       if (imageInput) {
         imageInput.value = "";
       }
       if (cameraInput) {
         cameraInput.value = "";
+      }
+      if (requestedSavedId) {
+        window.history.replaceState({}, "", "/app/analyze");
       }
       clearAnalyzeStateStorage();
       destroyBoard();
@@ -361,6 +735,7 @@
 
     function handleFileSelection(file) {
       clearError(uploadError);
+      clearError(saveFeedback);
       if (!file) {
         return;
       }
@@ -370,15 +745,19 @@
       }
       const reader = new FileReader();
       reader.onload = () => {
+        const nextState = createAnalyzeState();
         state.imageFile = file;
         state.imageDataUrl = String(reader.result || "");
-        state.detection = null;
-        state.selectedClick = null;
-        state.selectedSquare = null;
-        state.sideToMove = null;
-        state.completedPosition = null;
-        state.flipped = false;
-        state.analysis = createAnalyzeState().analysis;
+        state.detection = nextState.detection;
+        state.selectedClick = nextState.selectedClick;
+        state.selectedSquare = nextState.selectedSquare;
+        state.sideToMove = nextState.sideToMove;
+        state.completedPosition = nextState.completedPosition;
+        state.flipped = nextState.flipped;
+        state.savedSnapshotId = nextState.savedSnapshotId;
+        state.analysis = nextState.analysis;
+        state.explanation = nextState.explanation;
+        state.step = "upload";
         render();
       };
       reader.readAsDataURL(file);
@@ -386,6 +765,7 @@
 
     async function runBoardDetection() {
       clearError(detectError);
+      clearError(saveFeedback);
       if (!state.imageDataUrl) {
         showError(uploadError, "Choose an image before continuing.");
         return;
@@ -471,6 +851,7 @@
 
     async function completePosition() {
       clearError(completeError);
+      clearError(saveFeedback);
       if (!state.selectedClick || !state.sideToMove) {
         showError(
           completeError,
@@ -519,7 +900,9 @@
           return;
         }
         state.completedPosition = completionPayload.position;
+        state.savedSnapshotId = null;
         state.analysis = createAnalyzeState().analysis;
+        state.explanation = createExplanationState();
         state.step = "ready";
         render();
       } catch (_error) {
@@ -534,7 +917,10 @@
       if (!state.completedPosition) {
         return;
       }
-      if (typeof window.Chessboard === "undefined" || typeof window.Chess === "undefined") {
+      if (
+        typeof window.Chessboard === "undefined" ||
+        typeof window.Chess === "undefined"
+      ) {
         showError(
           analysisError,
           "Analysis board assets failed to load. Please refresh and try again."
@@ -545,8 +931,10 @@
         return;
       }
       state.step = "analysis";
+      state.savedSnapshotId = null;
       state.analysis.status = "loading";
       clearError(analysisError);
+      clearError(saveFeedback);
       render();
       try {
         const response = await fetch(analyzeEndpoint, {
@@ -572,12 +960,209 @@
           stepIndex: 0,
           flipped: false,
         };
+        state.explanation = createExplanationState();
         render();
       } catch (_error) {
         showError(analysisError, "Unable to run engine analysis right now.");
         state.analysis.status = "failed";
         render();
       }
+    }
+
+    async function requestExplanation(mode) {
+      if (!state.completedPosition) {
+        return;
+      }
+      const playedMove = mode === "played_move" ? playedMoveUci() : null;
+      if (mode === "played_move" && playedMove === null) {
+        showError(
+          explanationError,
+          "Choose the played move squares before requesting coaching."
+        );
+        return;
+      }
+
+      state.explanation.status = "loading";
+      state.explanation.mode = mode;
+      state.explanation.result = null;
+      state.explanation.warnings = [];
+      clearError(explanationError);
+      render();
+      try {
+        const response = await fetch(explainEndpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            fen: state.completedPosition.fen,
+            played_move_uci: playedMove,
+            top_n: 3,
+          }),
+        });
+        const payload = await response.json();
+        if (
+          !response.ok ||
+          (payload.status !== "success" && payload.status !== "skipped")
+        ) {
+          showError(
+            explanationError,
+            payload.detail || "Unable to generate insight right now."
+          );
+          state.explanation.status = "failed";
+          render();
+          return;
+        }
+
+        state.explanation.status = "success";
+        state.explanation.result = payload.explanation;
+        state.explanation.warnings = payload.warnings || [];
+        render();
+      } catch (_error) {
+        showError(
+          explanationError,
+          "Unable to generate insight right now. Please try again."
+        );
+        state.explanation.status = "failed";
+        render();
+      }
+    }
+
+    async function saveCurrentSnapshot() {
+      clearError(saveFeedback);
+      if (!state.completedPosition || !state.analysis.result) {
+        showError(saveFeedback, "Analyze a position before saving it.");
+        return;
+      }
+      saveButton.disabled = true;
+      saveButton.textContent = "Saving...";
+      try {
+        const response = await fetch(saveEndpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            snapshot: {
+              position: state.completedPosition,
+              analysis: state.analysis.result,
+              explanation:
+                state.explanation.status === "success"
+                  ? state.explanation.result
+                  : null,
+              explanation_warnings:
+                state.explanation.status === "success"
+                  ? state.explanation.warnings
+                  : [],
+              played_move_selection: state.explanation.playedMove,
+            },
+          }),
+        });
+        const payload = await response.json();
+        if (!response.ok || payload.status !== "success") {
+          showError(saveFeedback, payload.detail || "Unable to save this position.");
+          return;
+        }
+        state.savedSnapshotId = payload.snapshot.id;
+        saveFeedback.hidden = false;
+        saveFeedback.textContent = "Position saved.";
+        render();
+      } catch (_error) {
+        showError(saveFeedback, "Unable to save this position right now.");
+      } finally {
+        saveButton.disabled = false;
+        saveButton.textContent = "Save Position";
+      }
+    }
+
+    async function deleteCurrentSnapshot() {
+      if (state.savedSnapshotId === null) {
+        return;
+      }
+      if (!window.confirm("Delete this saved position?")) {
+        return;
+      }
+      deleteSavedButton.disabled = true;
+      deleteSavedButton.textContent = "Deleting...";
+      clearError(saveFeedback);
+      try {
+        const response = await fetch(
+          `${savedEndpointBase}/${state.savedSnapshotId}`,
+          {
+            method: "DELETE",
+            credentials: "same-origin",
+          }
+        );
+        const payload = await response.json();
+        if (!response.ok || payload.status !== "success") {
+          showError(
+            saveFeedback,
+            payload.detail || "Unable to delete this saved position."
+          );
+          return;
+        }
+        clearAnalyzeStateStorage();
+        window.location.href = "/app/saved";
+      } catch (_error) {
+        showError(saveFeedback, "Unable to delete this saved position right now.");
+      } finally {
+        deleteSavedButton.disabled = false;
+        deleteSavedButton.textContent = "Delete Saved Position";
+      }
+    }
+
+    async function loadSavedSnapshot(snapshotId) {
+      state.step = "analysis";
+      state.analysis.status = "loading";
+      clearError(analysisError);
+      clearError(saveFeedback);
+      render();
+      try {
+        const response = await fetch(`${savedEndpointBase}/${snapshotId}`, {
+          method: "GET",
+          credentials: "same-origin",
+        });
+        const payload = await response.json();
+        if (!response.ok || payload.status !== "success") {
+          showError(
+            analysisError,
+            payload.detail || "Unable to load the saved position."
+          );
+          state.analysis.status = "failed";
+          render();
+          return;
+        }
+        hydrateFromSavedSnapshot(payload.snapshot);
+      } catch (_error) {
+        showError(analysisError, "Unable to load the saved position right now.");
+        state.analysis.status = "failed";
+        render();
+      }
+    }
+
+    function hydrateFromSavedSnapshot(record) {
+      const snapshot = record.snapshot;
+      state.step = "analysis";
+      state.savedSnapshotId = record.id;
+      state.completedPosition = snapshot.position || null;
+      state.analysis = {
+        status: "success",
+        result: snapshot.analysis,
+        activeLineIndex: 0,
+        stepIndex: 0,
+        flipped: false,
+      };
+      state.explanation = createExplanationState();
+      if (snapshot.played_move_selection) {
+        state.explanation.playedMove = {
+          ...state.explanation.playedMove,
+          ...snapshot.played_move_selection,
+        };
+      }
+      if (snapshot.explanation) {
+        state.explanation.status = "success";
+        state.explanation.result = snapshot.explanation;
+        state.explanation.warnings = snapshot.explanation_warnings || [];
+      }
+      render();
     }
 
     function renderLineList() {
@@ -727,6 +1312,14 @@
       return next;
     }
 
+    function playedMoveUci() {
+      const { from, to, promotion } = state.explanation.playedMove;
+      if (!from || !to) {
+        return null;
+      }
+      return `${from}${to}${promotion || ""}`;
+    }
+
     imageInput.addEventListener("change", (event) => {
       handleFileSelection(event.currentTarget.files[0]);
     });
@@ -775,7 +1368,33 @@
       render();
     });
     analysisRetryButton.addEventListener("click", enterAnalysisMode);
-    root.querySelector("[data-start-over-button]").addEventListener("click", resetToUpload);
+    saveButton.addEventListener("click", saveCurrentSnapshot);
+    deleteSavedButton.addEventListener("click", deleteCurrentSnapshot);
+    explainBestButton.addEventListener("click", () => {
+      requestExplanation("best_move");
+    });
+    playedMoveForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      requestExplanation("played_move");
+    });
+    playedFromSelect.addEventListener("change", () => {
+      state.explanation.playedMove.from = playedFromSelect.value;
+      clearError(explanationError);
+      render();
+    });
+    playedToSelect.addEventListener("change", () => {
+      state.explanation.playedMove.to = playedToSelect.value;
+      clearError(explanationError);
+      render();
+    });
+    playedPromotionSelect.addEventListener("change", () => {
+      state.explanation.playedMove.promotion = playedPromotionSelect.value;
+      clearError(explanationError);
+      render();
+    });
+    root
+      .querySelector("[data-start-over-button]")
+      .addEventListener("click", resetToUpload);
     overlaySvg.addEventListener("click", handleOverlayClick);
 
     sideButtons.forEach((button) => {
@@ -792,7 +1411,38 @@
       }
     });
 
-    render();
+    populateSquareSelect(playedFromSelect);
+    populateSquareSelect(playedToSelect);
+
+    fetchSyncedSettings(settingsEndpoint)
+      .catch(() => loadSettings())
+      .finally(() => {
+        if (requestedSavedId) {
+          loadSavedSnapshot(requestedSavedId);
+          return;
+        }
+        render();
+      });
+  }
+
+  function populateSquareSelect(select) {
+    squareOptions().forEach((square) => {
+      const option = document.createElement("option");
+      option.value = square;
+      option.textContent = square;
+      select.appendChild(option);
+    });
+  }
+
+  function squareOptions() {
+    const files = "abcdefgh";
+    const squares = [];
+    for (let rank = 8; rank >= 1; rank -= 1) {
+      for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
+        squares.push(`${files[fileIndex]}${rank}`);
+      }
+    }
+    return squares;
   }
 
   function squareName(fileIndex, rankIndex) {
@@ -887,6 +1537,14 @@
     ];
   }
 
+  function formatSavedDate(isoText) {
+    try {
+      return new Date(isoText).toLocaleString();
+    } catch (_error) {
+      return isoText;
+    }
+  }
+
   document.querySelectorAll("[data-auth-form]").forEach((form) => {
     form.addEventListener("submit", handleAuthFormSubmit);
   });
@@ -895,7 +1553,13 @@
     button.addEventListener("click", handleLogout);
   });
 
-  setupSettingsForm();
+  document.querySelectorAll("[data-profile-app]").forEach((root) => {
+    setupProfileApp(root);
+  });
+
+  document.querySelectorAll("[data-saved-app]").forEach((root) => {
+    setupSavedApp(root);
+  });
 
   document.querySelectorAll("[data-analyze-app]").forEach((root) => {
     setupAnalyzeFlow(root);
