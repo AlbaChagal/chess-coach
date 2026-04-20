@@ -21,12 +21,14 @@
       data-detect-endpoint="/detect-board"
       data-vision-endpoint="/vision"
       data-complete-endpoint="/complete-position"
+      data-analyze-endpoint="/analyze"
     >
       <div class="step-indicator">
         <span class="step-pill active" data-step-pill="upload">1. Image</span>
         <span class="step-pill" data-step-pill="orientation">2. Orientation</span>
         <span class="step-pill" data-step-pill="side">3. Side to move</span>
         <span class="step-pill" data-step-pill="ready">4. Ready</span>
+        <span class="step-pill" data-step-pill="analysis">5. Analysis</span>
       </div>
 
       <section class="analyze-step" data-step="upload">
@@ -175,9 +177,77 @@
 
         <div class="step-actions">
           <button class="secondary-link" data-start-over-button>Start Over</button>
-          <button class="primary-button" disabled>
-            Continue to Analysis (Phase 3)
+          <button class="primary-button" data-continue-to-analysis-button>
+            Continue to Analysis
           </button>
+        </div>
+      </section>
+
+      <section class="analyze-step" data-step="analysis" hidden>
+        <div class="analysis-header">
+          <div>
+            <h2>Analysis</h2>
+            <p class="screen-subheading">
+              Review the top engine lines and step through the suggested
+              continuations.
+            </p>
+          </div>
+          <button class="secondary-link" data-analysis-flip-button>
+            Flip Board
+          </button>
+        </div>
+
+        <div class="analysis-loading" data-analysis-loading hidden>
+          Running engine analysis...
+        </div>
+
+        <p class="form-error" data-analysis-error hidden></p>
+
+        <div class="analysis-layout" data-analysis-layout hidden>
+          <div class="board-panel">
+            <div class="analysis-board-shell" data-analysis-board-shell>
+              <div class="analysis-board" data-analysis-board></div>
+              <svg class="analysis-arrow-layer" data-analysis-arrow-layer hidden>
+                <defs>
+                  <marker
+                    id="analysis-arrow-head"
+                    markerWidth="10"
+                    markerHeight="10"
+                    refX="8"
+                    refY="5"
+                    orient="auto"
+                  >
+                    <polygon points="0 0, 10 5, 0 10"></polygon>
+                  </marker>
+                </defs>
+                <line data-analysis-arrow hidden></line>
+              </svg>
+            </div>
+            <div class="analysis-playback">
+              <button class="secondary-link" data-analysis-prev-button>
+                Previous
+              </button>
+              <button class="secondary-link" data-analysis-reset-button>
+                Reset
+              </button>
+              <button class="secondary-link" data-analysis-next-button>
+                Next
+              </button>
+            </div>
+            <p class="selection-note" data-analysis-step-note>
+              Step 0 of 0
+            </p>
+          </div>
+
+          <div class="analysis-lines">
+            <div class="analysis-lines-header">
+              <h3>Top Lines</h3>
+              <button class="secondary-link" data-analysis-retry-button hidden>
+                Retry
+              </button>
+            </div>
+            <div class="line-list" data-line-list></div>
+          </div>
         </div>
       </section>
     </div>
@@ -220,13 +290,13 @@
         <div class="setting-row">
           <span>Coordinates Display</span>
           <label class="switch">
-            <input type="checkbox" checked disabled>
+            <input type="checkbox" checked data-setting-input="showCoordinates">
             <span class="switch-track"></span>
           </label>
         </div>
         <p class="setting-note">
-          Settings are visible now and will become live app preferences in a
-          later phase.
+          Coordinates display now affects the analysis board. Other settings
+          will become live app preferences in later phases.
         </p>
       </section>
 

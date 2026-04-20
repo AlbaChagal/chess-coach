@@ -1,4 +1,9 @@
 (function () {
+  const ANALYZE_STORAGE_KEY = "chesscoach-analyze-state";
+  const SETTINGS_STORAGE_KEY = "chesscoach-ui-settings";
+  const PIECE_THEME_URL =
+    "https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png";
+
   function showError(target, message) {
     if (!target) {
       return;
@@ -13,6 +18,22 @@
     }
     target.hidden = true;
     target.textContent = "";
+  }
+
+  function loadSettings() {
+    try {
+      const stored = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+      if (!stored) {
+        return { showCoordinates: true };
+      }
+      return { showCoordinates: true, ...JSON.parse(stored) };
+    } catch (_error) {
+      return { showCoordinates: true };
+    }
+  }
+
+  function saveSettings(settings) {
+    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
   }
 
   async function handleAuthFormSubmit(event) {
@@ -83,6 +104,22 @@
     }
   }
 
+  function setupSettingsForm() {
+    const settings = loadSettings();
+    document.querySelectorAll("[data-setting-input]").forEach((input) => {
+      if (input.dataset.settingInput === "showCoordinates") {
+        input.checked = settings.showCoordinates;
+      }
+      input.addEventListener("change", () => {
+        const nextSettings = {
+          ...loadSettings(),
+          [input.dataset.settingInput]: input.checked,
+        };
+        saveSettings(nextSettings);
+      });
+    });
+  }
+
   function createAnalyzeState() {
     return {
       step: "upload",
@@ -94,14 +131,60 @@
       sideToMove: null,
       completedPosition: null,
       flipped: false,
+      analysis: {
+        status: "idle",
+        result: null,
+        activeLineIndex: 0,
+        stepIndex: 0,
+        flipped: false,
+      },
     };
+  }
+
+  function restoreAnalyzeState() {
+    try {
+      const stored = window.sessionStorage.getItem(ANALYZE_STORAGE_KEY);
+      if (!stored) {
+        return null;
+      }
+      return JSON.parse(stored);
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function persistAnalyzeState(state) {
+    const payload = {
+      step: state.step,
+      completedPosition: state.completedPosition,
+      analysis: state.analysis,
+    };
+    window.sessionStorage.setItem(ANALYZE_STORAGE_KEY, JSON.stringify(payload));
+  }
+
+  function clearAnalyzeStateStorage() {
+    window.sessionStorage.removeItem(ANALYZE_STORAGE_KEY);
   }
 
   function setupAnalyzeFlow(root) {
     const state = createAnalyzeState();
+    const restored = restoreAnalyzeState();
+    if (restored) {
+      state.step = restored.step || state.step;
+      state.completedPosition = restored.completedPosition || null;
+      state.analysis = {
+        ...state.analysis,
+        ...(restored.analysis || {}),
+      };
+      if (!state.completedPosition && state.step !== "upload") {
+        state.step = "upload";
+      }
+    }
+
     const detectEndpoint = root.dataset.detectEndpoint;
     const visionEndpoint = root.dataset.visionEndpoint;
     const completeEndpoint = root.dataset.completeEndpoint;
+    const analyzeEndpoint = root.dataset.analyzeEndpoint;
 
     const stepSections = Array.from(root.querySelectorAll("[data-step]"));
     const stepPills = Array.from(root.querySelectorAll("[data-step-pill]"));
@@ -110,6 +193,7 @@
     const uploadError = root.querySelector("[data-upload-error]");
     const detectError = root.querySelector("[data-detect-error]");
     const completeError = root.querySelector("[data-complete-error]");
+    const analysisError = root.querySelector("[data-analysis-error]");
     const previewCard = root.querySelector("[data-image-preview-card]");
     const previewImage = root.querySelector("[data-image-preview]");
     const stageImage = root.querySelector("[data-stage-image]");
@@ -131,6 +215,24 @@
     const readyFen = root.querySelector("[data-ready-fen]");
     const readyCastling = root.querySelector("[data-ready-castling]");
     const readyEnPassant = root.querySelector("[data-ready-en-passant]");
+    const continueToAnalysisButton = root.querySelector(
+      "[data-continue-to-analysis-button]"
+    );
+    const analysisLoading = root.querySelector("[data-analysis-loading]");
+    const analysisLayout = root.querySelector("[data-analysis-layout]");
+    const analysisBoardElement = root.querySelector("[data-analysis-board]");
+    const analysisArrowLayer = root.querySelector("[data-analysis-arrow-layer]");
+    const analysisArrow = root.querySelector("[data-analysis-arrow]");
+    const analysisFlipButton = root.querySelector("[data-analysis-flip-button]");
+    const analysisPrevButton = root.querySelector("[data-analysis-prev-button]");
+    const analysisNextButton = root.querySelector("[data-analysis-next-button]");
+    const analysisResetButton = root.querySelector("[data-analysis-reset-button]");
+    const analysisRetryButton = root.querySelector("[data-analysis-retry-button]");
+    const analysisStepNote = root.querySelector("[data-analysis-step-note]");
+    const lineList = root.querySelector("[data-line-list]");
+
+    let boardWidget = null;
+    let boardShowNotation = null;
 
     function render() {
       stepSections.forEach((section) => {
@@ -153,35 +255,26 @@
         stage.classList.toggle("flipped", state.flipped);
       }
 
-      if (detectButton) {
-        detectButton.disabled = !state.imageDataUrl;
-      }
-      if (resetImageButton) {
-        resetImageButton.hidden = !state.imageDataUrl;
-      }
-      if (orientationContinueButton) {
-        orientationContinueButton.disabled = state.selectedClick === null;
-      }
-      if (completeButton) {
-        completeButton.disabled = state.sideToMove === null;
-      }
+      detectButton.disabled = !state.imageDataUrl;
+      resetImageButton.hidden = !state.imageDataUrl;
+      orientationContinueButton.disabled = state.selectedClick === null;
+      completeButton.disabled = state.sideToMove === null;
 
       sideButtons.forEach((button) => {
-        button.classList.toggle("active", button.dataset.sideOption === state.sideToMove);
+        button.classList.toggle(
+          "active",
+          button.dataset.sideOption === state.sideToMove
+        );
       });
 
-      if (selectionNote) {
-        selectionNote.textContent = state.selectedSquare
-          ? `Selected square: ${state.selectedSquare}.`
-          : "No square selected yet.";
-      }
-      if (sideNote) {
-        sideNote.textContent = state.sideToMove
-          ? `${state.sideToMove === "w" ? "White" : "Black"} to move selected.`
-          : "No side selected yet.";
-      }
+      selectionNote.textContent = state.selectedSquare
+        ? `Selected square: ${state.selectedSquare}.`
+        : "No square selected yet.";
+      sideNote.textContent = state.sideToMove
+        ? `${state.sideToMove === "w" ? "White" : "Black"} to move selected.`
+        : "No side selected yet.";
 
-      if (state.detection && overlaySvg && boardOutline) {
+      if (state.detection && state.detection.board_corners) {
         overlaySvg.setAttribute(
           "viewBox",
           `0 0 ${state.detection.image_width} ${state.detection.image_height}`
@@ -192,19 +285,15 @@
         );
       }
 
-      if (selectedSquare) {
-        selectedSquare.hidden = state.selectedClick === null;
-      }
-      if (selectedPoint) {
-        selectedPoint.hidden = state.selectedClick === null;
-      }
+      selectedSquare.hidden = state.selectedClick === null;
+      selectedPoint.hidden = state.selectedClick === null;
 
-      if (state.selectedClick && selectedPoint) {
+      if (state.selectedClick) {
         selectedPoint.setAttribute("cx", String(state.selectedClick.x));
         selectedPoint.setAttribute("cy", String(state.selectedClick.y));
       }
 
-      if (state.selectedClick && state.detection && selectedSquare) {
+      if (state.selectedClick && state.detection && state.selectedSquare) {
         const polygonPoints = squarePolygonPoints(state);
         selectedSquare.setAttribute(
           "points",
@@ -216,7 +305,32 @@
         readyFen.textContent = state.completedPosition.fen;
         readyCastling.textContent = state.completedPosition.castling_rights;
         readyEnPassant.textContent = state.completedPosition.en_passant;
+        continueToAnalysisButton.disabled = false;
+      } else {
+        continueToAnalysisButton.disabled = true;
       }
+
+      renderAnalysisState();
+      persistAnalyzeState(state);
+    }
+
+    function renderAnalysisState() {
+      const analysis = state.analysis;
+      analysisLoading.hidden = analysis.status !== "loading";
+      analysisLayout.hidden = analysis.status !== "success";
+      analysisRetryButton.hidden = analysis.status !== "failed";
+      if (analysis.status !== "failed") {
+        clearError(analysisError);
+      }
+
+      if (analysis.status !== "success" || !analysis.result) {
+        return;
+      }
+
+      renderLineList();
+      renderBoard();
+      renderArrow();
+      renderPlaybackControls();
     }
 
     function resetToUpload() {
@@ -229,11 +343,19 @@
       state.sideToMove = null;
       state.completedPosition = null;
       state.flipped = false;
+      state.analysis = createAnalyzeState().analysis;
       clearError(uploadError);
       clearError(detectError);
       clearError(completeError);
-      imageInput.value = "";
-      cameraInput.value = "";
+      clearError(analysisError);
+      if (imageInput) {
+        imageInput.value = "";
+      }
+      if (cameraInput) {
+        cameraInput.value = "";
+      }
+      clearAnalyzeStateStorage();
+      destroyBoard();
       render();
     }
 
@@ -256,6 +378,7 @@
         state.sideToMove = null;
         state.completedPosition = null;
         state.flipped = false;
+        state.analysis = createAnalyzeState().analysis;
         render();
       };
       reader.readAsDataURL(file);
@@ -295,7 +418,10 @@
         state.step = "orientation";
         render();
       } catch (_error) {
-        showError(detectError, "Unable to detect the board right now. Please try again.");
+        showError(
+          detectError,
+          "Unable to detect the board right now. Please try again."
+        );
         state.step = "orientation";
         render();
       } finally {
@@ -334,12 +460,7 @@
       const boardPoint = applyHomography(imageToBoard, [point.x, point.y]);
       const fileIndex = Math.floor(boardPoint[0]);
       const rankIndex = Math.floor(boardPoint[1]);
-      if (
-        fileIndex < 0 ||
-        fileIndex > 7 ||
-        rankIndex < 0 ||
-        rankIndex > 7
-      ) {
+      if (fileIndex < 0 || fileIndex > 7 || rankIndex < 0 || rankIndex > 7) {
         showError(detectError, "Tap inside the detected board area.");
         return;
       }
@@ -351,7 +472,10 @@
     async function completePosition() {
       clearError(completeError);
       if (!state.selectedClick || !state.sideToMove) {
-        showError(completeError, "Finish the orientation and side-to-move steps first.");
+        showError(
+          completeError,
+          "Finish the orientation and side-to-move steps first."
+        );
         return;
       }
       completeButton.disabled = true;
@@ -395,6 +519,7 @@
           return;
         }
         state.completedPosition = completionPayload.position;
+        state.analysis = createAnalyzeState().analysis;
         state.step = "ready";
         render();
       } catch (_error) {
@@ -403,6 +528,203 @@
         completeButton.disabled = state.sideToMove === null;
         completeButton.textContent = "Complete Position";
       }
+    }
+
+    async function enterAnalysisMode() {
+      if (!state.completedPosition) {
+        return;
+      }
+      if (typeof window.Chessboard === "undefined" || typeof window.Chess === "undefined") {
+        showError(
+          analysisError,
+          "Analysis board assets failed to load. Please refresh and try again."
+        );
+        state.step = "analysis";
+        state.analysis.status = "failed";
+        render();
+        return;
+      }
+      state.step = "analysis";
+      state.analysis.status = "loading";
+      clearError(analysisError);
+      render();
+      try {
+        const response = await fetch(analyzeEndpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            fen: state.completedPosition.fen,
+            top_n: 3,
+          }),
+        });
+        const payload = await response.json();
+        if (!response.ok || payload.status !== "success") {
+          showError(analysisError, payload.detail || "Unable to run engine analysis.");
+          state.analysis.status = "failed";
+          render();
+          return;
+        }
+        state.analysis = {
+          status: "success",
+          result: payload.analysis,
+          activeLineIndex: 0,
+          stepIndex: 0,
+          flipped: false,
+        };
+        render();
+      } catch (_error) {
+        showError(analysisError, "Unable to run engine analysis right now.");
+        state.analysis.status = "failed";
+        render();
+      }
+    }
+
+    function renderLineList() {
+      const analysis = state.analysis;
+      const topMoves = analysis.result.top_moves || [];
+      lineList.innerHTML = "";
+      topMoves.forEach((move, index) => {
+        const button = document.createElement("button");
+        button.className = "line-card";
+        if (index === analysis.activeLineIndex) {
+          button.classList.add("active");
+        }
+        const previewMoves = [move.move_san].concat(move.continuation || []).join(" ");
+        button.innerHTML = `
+          <div class="line-card-head">
+            <span class="line-card-move">${index + 1}. ${move.move_san}</span>
+            <span class="line-card-score">${move.score_display}</span>
+          </div>
+          <p class="line-card-preview">${previewMoves}</p>
+        `;
+        button.addEventListener("click", () => {
+          state.analysis.activeLineIndex = index;
+          state.analysis.stepIndex = 0;
+          render();
+        });
+        lineList.appendChild(button);
+      });
+    }
+
+    function renderBoard() {
+      const currentFen = currentPlaybackFen(state);
+      const orientation = state.analysis.flipped ? "black" : "white";
+      const showNotation = loadSettings().showCoordinates;
+      const config = {
+        draggable: false,
+        position: currentFen,
+        orientation,
+        showNotation,
+        pieceTheme: PIECE_THEME_URL,
+      };
+      if (boardWidget === null || boardShowNotation !== showNotation) {
+        destroyBoard();
+        boardWidget = window.Chessboard(analysisBoardElement, config);
+        boardShowNotation = showNotation;
+      } else {
+        boardWidget.orientation(orientation);
+        boardWidget.position(currentFen, false);
+      }
+    }
+
+    function destroyBoard() {
+      if (boardWidget && typeof boardWidget.destroy === "function") {
+        boardWidget.destroy();
+      }
+      boardWidget = null;
+      boardShowNotation = null;
+      if (analysisBoardElement) {
+        analysisBoardElement.innerHTML = "";
+      }
+    }
+
+    function renderPlaybackControls() {
+      const moves = currentLineMoves(state);
+      analysisPrevButton.disabled = state.analysis.stepIndex === 0;
+      analysisNextButton.disabled = state.analysis.stepIndex >= moves.length;
+      analysisResetButton.disabled = state.analysis.stepIndex === 0;
+      analysisStepNote.textContent = `Step ${state.analysis.stepIndex} of ${moves.length}`;
+    }
+
+    function renderArrow() {
+      const arrowMove = currentArrowMove(state);
+      if (!arrowMove || !boardWidget) {
+        analysisArrow.hidden = true;
+        analysisArrowLayer.hidden = true;
+        return;
+      }
+      const fromSquare = analysisBoardElement.querySelector(`.square-${arrowMove.from}`);
+      const toSquare = analysisBoardElement.querySelector(`.square-${arrowMove.to}`);
+      if (!fromSquare || !toSquare) {
+        analysisArrow.hidden = true;
+        analysisArrowLayer.hidden = true;
+        return;
+      }
+      const boardRect = analysisBoardElement.getBoundingClientRect();
+      const fromRect = fromSquare.getBoundingClientRect();
+      const toRect = toSquare.getBoundingClientRect();
+      analysisArrowLayer.setAttribute(
+        "viewBox",
+        `0 0 ${boardRect.width} ${boardRect.height}`
+      );
+      analysisArrow.setAttribute(
+        "x1",
+        String(fromRect.left - boardRect.left + fromRect.width / 2)
+      );
+      analysisArrow.setAttribute(
+        "y1",
+        String(fromRect.top - boardRect.top + fromRect.height / 2)
+      );
+      analysisArrow.setAttribute(
+        "x2",
+        String(toRect.left - boardRect.left + toRect.width / 2)
+      );
+      analysisArrow.setAttribute(
+        "y2",
+        String(toRect.top - boardRect.top + toRect.height / 2)
+      );
+      analysisArrow.hidden = false;
+      analysisArrowLayer.hidden = false;
+    }
+
+    function currentLineMoves(state) {
+      if (!state.analysis.result) {
+        return [];
+      }
+      const move = state.analysis.result.top_moves[state.analysis.activeLineIndex];
+      if (!move) {
+        return [];
+      }
+      return [move.move_san].concat(move.continuation || []);
+    }
+
+    function currentPlaybackFen(state) {
+      if (!state.completedPosition) {
+        return "start";
+      }
+      const chess = new window.Chess(state.completedPosition.fen);
+      const moves = currentLineMoves(state);
+      for (let index = 0; index < state.analysis.stepIndex; index += 1) {
+        chess.move(moves[index], { sloppy: true });
+      }
+      return chess.fen();
+    }
+
+    function currentArrowMove(state) {
+      if (!state.completedPosition || !state.analysis.result) {
+        return null;
+      }
+      const moves = currentLineMoves(state);
+      if (state.analysis.stepIndex >= moves.length) {
+        return null;
+      }
+      const chess = new window.Chess(currentPlaybackFen(state));
+      const next = chess.move(moves[state.analysis.stepIndex], { sloppy: true });
+      if (!next) {
+        return null;
+      }
+      return next;
     }
 
     imageInput.addEventListener("change", (event) => {
@@ -434,6 +756,25 @@
       render();
     });
     completeButton.addEventListener("click", completePosition);
+    continueToAnalysisButton.addEventListener("click", enterAnalysisMode);
+    analysisFlipButton.addEventListener("click", () => {
+      state.analysis.flipped = !state.analysis.flipped;
+      render();
+    });
+    analysisPrevButton.addEventListener("click", () => {
+      state.analysis.stepIndex = Math.max(0, state.analysis.stepIndex - 1);
+      render();
+    });
+    analysisNextButton.addEventListener("click", () => {
+      const maxIndex = currentLineMoves(state).length;
+      state.analysis.stepIndex = Math.min(maxIndex, state.analysis.stepIndex + 1);
+      render();
+    });
+    analysisResetButton.addEventListener("click", () => {
+      state.analysis.stepIndex = 0;
+      render();
+    });
+    analysisRetryButton.addEventListener("click", enterAnalysisMode);
     root.querySelector("[data-start-over-button]").addEventListener("click", resetToUpload);
     overlaySvg.addEventListener("click", handleOverlayClick);
 
@@ -443,6 +784,12 @@
         clearError(completeError);
         render();
       });
+    });
+
+    window.addEventListener("resize", () => {
+      if (state.step === "analysis" && state.analysis.status === "success") {
+        renderArrow();
+      }
     });
 
     render();
@@ -533,8 +880,7 @@
 
   function applyHomography(matrix, point) {
     const [x, y] = point;
-    const denominator =
-      matrix[2][0] * x + matrix[2][1] * y + matrix[2][2];
+    const denominator = matrix[2][0] * x + matrix[2][1] * y + matrix[2][2];
     return [
       (matrix[0][0] * x + matrix[0][1] * y + matrix[0][2]) / denominator,
       (matrix[1][0] * x + matrix[1][1] * y + matrix[1][2]) / denominator,
@@ -548,6 +894,8 @@
   document.querySelectorAll("[data-logout-button]").forEach((button) => {
     button.addEventListener("click", handleLogout);
   });
+
+  setupSettingsForm();
 
   document.querySelectorAll("[data-analyze-app]").forEach((root) => {
     setupAnalyzeFlow(root);

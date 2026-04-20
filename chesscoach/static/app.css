@@ -260,6 +260,119 @@ p {
   gap: 16px;
 }
 
+.analysis-header,
+.analysis-lines-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 12px;
+}
+
+.analysis-loading {
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: rgba(21, 51, 89, 0.08);
+  color: var(--navy);
+  font-weight: 700;
+}
+
+.analysis-layout {
+  display: grid;
+  gap: 18px;
+}
+
+.board-panel,
+.analysis-lines {
+  display: grid;
+  gap: 12px;
+}
+
+.analysis-board-shell {
+  position: relative;
+  overflow: hidden;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.analysis-board {
+  width: 100%;
+}
+
+.analysis-arrow-layer {
+  position: absolute;
+  inset: 12px;
+  width: calc(100% - 24px);
+  height: calc(100% - 24px);
+  pointer-events: none;
+}
+
+.analysis-arrow-layer line {
+  stroke: rgba(197, 58, 52, 0.95);
+  stroke-width: 10;
+  stroke-linecap: round;
+  marker-end: url(#analysis-arrow-head);
+}
+
+.analysis-arrow-layer polygon {
+  fill: rgba(197, 58, 52, 0.95);
+}
+
+.analysis-playback {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.line-list {
+  display: grid;
+  gap: 10px;
+}
+
+.line-card {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--ink);
+  text-align: left;
+  font: inherit;
+}
+
+.line-card.active {
+  border-color: var(--navy);
+  background: rgba(21, 51, 89, 0.1);
+}
+
+.line-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.line-card-move {
+  font-weight: 700;
+}
+
+.line-card-score {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(47, 143, 78, 0.12);
+  color: var(--green);
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.line-card-preview {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 .upload-actions,
 .step-actions {
   display: flex;
@@ -527,5 +640,10 @@ p {
 
   .app-shell {
     max-width: 960px;
+  }
+
+  .analysis-layout {
+    grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
+    align-items: start;
   }
 }
