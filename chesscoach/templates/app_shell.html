@@ -13,7 +13,7 @@
     <div class="user-chip">{{ user.email }}</div>
   </header>
 
-  <section class="app-card">
+  <section class="app-card app-card-{{ body_variant }}">
     {% if body_variant == "analyze" %}
     <div
       class="analyze-flow"
@@ -131,8 +131,9 @@
         <div class="orientation-header">
           <h2>Where did the white king start the game?</h2>
           <p>
-            Tap the square on the detected board overlay. This helps orient the
-            board correctly before analysis.
+            Adjust the four board corners if needed, then tap the white king's
+            starting square on the overlaid board. This helps orient the board
+            correctly before analysis.
           </p>
         </div>
 
@@ -148,6 +149,14 @@
             <polygon class="board-outline" data-board-outline></polygon>
             <polygon class="selected-square" data-selected-square hidden></polygon>
             <circle class="selected-point" data-selected-point hidden r="6"></circle>
+            <g class="selected-marker" data-selected-marker hidden>
+              <rect class="selected-marker-pill" data-selected-marker-pill></rect>
+              <text class="selected-marker-text" data-selected-marker-text></text>
+            </g>
+            <circle class="corner-handle" data-corner-handle="0" r="10"></circle>
+            <circle class="corner-handle" data-corner-handle="1" r="10"></circle>
+            <circle class="corner-handle" data-corner-handle="2" r="10"></circle>
+            <circle class="corner-handle" data-corner-handle="3" r="10"></circle>
           </svg>
         </div>
 
@@ -155,11 +164,20 @@
           <p class="selection-note" data-selection-note>
             No square selected yet.
           </p>
+          <div class="selection-badge" data-selection-badge hidden>
+            White king start square: <strong data-selection-badge-square>-</strong>
+          </div>
+          <p class="selection-note">
+            Drag a corner handle if the outline misses the board.
+          </p>
         </div>
 
         <div class="step-actions">
           <button class="secondary-link" data-back-to-upload-button>
             Back
+          </button>
+          <button class="secondary-link" data-reset-corners-button>
+            Reset Corners
           </button>
           <button class="secondary-link" data-flip-button>
             Flip Board
@@ -224,7 +242,7 @@
         </div>
 
         <div class="step-actions">
-          <button class="secondary-link" data-start-over-button>Start Over</button>
+          <button class="secondary-link" data-reset-flow-button>Start Over</button>
           <button class="primary-button" data-continue-to-analysis-button>
             Continue to Analysis
           </button>
@@ -233,6 +251,9 @@
 
       <section class="analyze-step" data-step="analysis" hidden>
         <div class="analysis-header-actions">
+          <button class="secondary-link" data-reset-flow-button>
+            New Board
+          </button>
           <button class="secondary-link" data-save-button>
             Save Position
           </button>

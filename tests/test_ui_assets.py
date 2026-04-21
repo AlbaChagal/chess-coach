@@ -15,12 +15,23 @@ def test_orientation_click_handler_is_bound_to_image_stage() -> None:
 
 def test_orientation_click_maps_from_rendered_image_bounds() -> None:
     script = (PROJECT_ROOT / "chesscoach/static/app.js").read_text()
+    styles = (PROJECT_ROOT / "chesscoach/static/app.css").read_text()
+    template = (PROJECT_ROOT / "chesscoach/templates/app_shell.html").read_text()
 
     assert "const rect = stageImage.getBoundingClientRect();" in script
     assert "if (state.flipped) {" in script
-    assert 'cursor: crosshair;' in (
-        PROJECT_ROOT / "chesscoach/static/app.css"
-    ).read_text()
+    assert 'cursor: crosshair;' in styles
+    assert "stroke-dasharray: 8 5;" in styles
+    assert "filter: drop-shadow(0 0 10px rgba(159, 61, 50, 0.4));" in styles
+    assert '.corner-handle {' in styles
+    assert 'cursor: grab;' in styles
+    assert 'data-selection-badge' in template
+    assert 'data-selected-marker' in template
+    assert "function setElementVisibility(element, visible)" in script
+    assert 'element.removeAttribute("hidden");' in script
+    assert 'setElementVisibility(selectionBadge, !!state.selectedSquare);' in script
+    assert 'selectedMarkerText.textContent = markerText;' in script
+    assert '.selection-badge {' in styles
 
 
 def test_analysis_success_path_uses_dedicated_render_error_message() -> None:
@@ -29,6 +40,8 @@ def test_analysis_success_path_uses_dedicated_render_error_message() -> None:
     assert 'showError(analysisError, "Unable to run engine analysis right now.");' in (
         script
     )
+    assert "Unable to update the analysis view right now. Please try again." in script
+    assert 'console.error("analysis render failed", _error, payload.analysis);' in script
     assert "renderAfterAnalysisSuccess" not in script
 
 
@@ -39,6 +52,10 @@ def test_analysis_board_renderer_is_hardened_against_partial_dom_state() -> None
     assert (
         "Board preview unavailable right now. Lines and scores are still available."
         in script
+    )
+    assert "function normalizeAnalysisResult(result)" in script
+    assert 'console.error("analysis playback render failed", error, state.analysis);' in (
+        script
     )
     assert "function rebuildBoard(boardElement, fen, orientation, showNotation)" in script
     assert "const squareIndex = (8 - rank) * 8 + fileIndex;" in script
@@ -58,8 +75,31 @@ def test_starting_board_preview_is_rendered_from_known_fen() -> None:
         script
     )
     assert "function renderPreviewBoard()" in script
-    assert "const previewFen =" in script
+    assert "let previewFen = state.completedPosition?.fen || STARTING_POSITION_FEN;" in (
+        script
+    )
     assert "state.completedPosition?.fen ||" in script
     assert "STARTING_POSITION_FEN;" in script
     assert "renderPreviewBoard();" in script
     assert "renderAnalysisState();" in script
+
+
+def test_reset_flow_buttons_are_bound_globally() -> None:
+    script = (PROJECT_ROOT / "chesscoach/static/app.js").read_text()
+
+    assert 'root.querySelectorAll("[data-reset-flow-button]").forEach((button) => {' in (
+        script
+    )
+    assert 'button.addEventListener("click", resetToUpload);' in script
+
+
+def test_orientation_manual_corner_correction_is_wired() -> None:
+    script = (PROJECT_ROOT / "chesscoach/static/app.js").read_text()
+    template = (PROJECT_ROOT / "chesscoach/templates/app_shell.html").read_text()
+
+    assert 'data-corner-handle="0"' in template
+    assert 'data-reset-corners-button' in template
+    assert 'board_corners: state.detection?.board_corners?.map((point) => ({' in script
+    assert 'stage.addEventListener("pointerdown", handleStagePointerDown);' in script
+    assert 'stage.addEventListener("pointermove", handleStagePointerMove);' in script
+    assert "function resetBoardCorners()" in script

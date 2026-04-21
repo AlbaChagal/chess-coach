@@ -295,6 +295,8 @@ def test_analyze_page_renders_phase_two_flow_shell(client: TestClient) -> None:
     assert '/static/app.js?v=' in response.text
     assert 'data-analysis-board' in response.text
     assert "Board preview updates from the starting position" in response.text
+    assert 'data-reset-flow-button' in response.text
+    assert "New Board" in response.text
     assert "Continue to Analysis" in response.text
     assert "Top Lines" in response.text
     assert "Explain Best Move" in response.text
@@ -314,7 +316,7 @@ def test_detect_board_endpoint_returns_corners_for_detectable_board(
     payload = response.json()
     assert payload["status"] == "success"
     assert len(payload["detection"]["board_corners"]) == 4
-    assert payload["detection"]["confidence"] == 1.0
+    assert payload["detection"]["confidence"] == 0.9
 
 
 def test_detect_board_endpoint_returns_warning_on_failure(client: TestClient) -> None:
@@ -324,8 +326,9 @@ def test_detect_board_endpoint_returns_warning_on_failure(client: TestClient) ->
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "failed"
-    assert payload["detection"]["board_corners"] is None
+    assert payload["status"] == "success"
+    assert len(payload["detection"]["board_corners"]) == 4
+    assert payload["detection"]["confidence"] == 0.22
     assert payload["warnings"][0]["code"] == "board_detection_low_confidence"
 
 
@@ -361,6 +364,7 @@ def test_vision_endpoint_decodes_image_and_returns_result(
     def _run_vision(request):
         captured["image"] = request.image
         captured["click"] = request.white_king_start_click
+        captured["board_corners"] = request.board_corners
         return (
             VisionResult(
                 fen_placement=STARTING_PLACEMENT,
@@ -379,6 +383,12 @@ def test_vision_endpoint_decodes_image_and_returns_result(
         json={
             "image_base64": _image_payload(),
             "white_king_start_click": {"x": 12.0, "y": 34.0},
+            "board_corners": [
+                {"x": 1.0, "y": 2.0},
+                {"x": 3.0, "y": 4.0},
+                {"x": 5.0, "y": 6.0},
+                {"x": 7.0, "y": 8.0},
+            ],
         },
     )
 
@@ -388,6 +398,12 @@ def test_vision_endpoint_decodes_image_and_returns_result(
     assert payload["vision"]["fen_placement"] == STARTING_PLACEMENT
     assert captured["image"] == b"fake-image-bytes"
     assert captured["click"] == ImageClick(x=12.0, y=34.0)
+    assert captured["board_corners"] == [
+        ImageClick(x=1.0, y=2.0),
+        ImageClick(x=3.0, y=4.0),
+        ImageClick(x=5.0, y=6.0),
+        ImageClick(x=7.0, y=8.0),
+    ]
 
 
 def test_vision_endpoint_rejects_invalid_base64(client: TestClient) -> None:

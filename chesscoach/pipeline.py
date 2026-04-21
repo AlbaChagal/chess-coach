@@ -10,6 +10,7 @@ from typing import Any
 from typing import cast
 
 import chess
+import numpy as np
 
 from chesscoach.analysis.coach import ChessCoach
 from chesscoach.analysis.engine import ChessEngine
@@ -85,6 +86,14 @@ def run_vision(request: CoachingRequest) -> tuple[VisionResult, list[PipelineWar
             white_king_start_click=(
                 request.white_king_start_click.x,
                 request.white_king_start_click.y,
+            ),
+            board_corners=(
+                np.array(
+                    [[point.x, point.y] for point in request.board_corners],
+                    dtype=np.float32,
+                )
+                if request.board_corners
+                else None
             ),
         )
     except (BoardNotFoundError, ValueError):

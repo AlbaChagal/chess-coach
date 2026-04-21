@@ -41,6 +41,8 @@ include = ["chesscoach*"]
 
 [dependency-groups]
 dev = [
+    "playwright>=1.58.0",
     "pyright>=1.1.408",
+    "pytest-playwright>=0.7.2",
     "ruff>=0.15.10",
 ]

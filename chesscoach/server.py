@@ -56,6 +56,8 @@ LOW_CONFIDENCE_WARNING = PipelineWarning(
     code="board_detection_low_confidence",
     message="The board could not be detected. Please try to upload a clearer image.",
 )
+FALLBACK_BOARD_CONFIDENCE = 0.22
+AUTO_BOARD_CONFIDENCE = 0.9
 
 
 class ApiImageClick(BaseModel):
@@ -70,6 +72,11 @@ class VisionApiRequest(BaseModel):
 
     image_base64: str
     white_king_start_click: ApiImageClick
+    board_corners: list[ApiImageClick] | None = Field(
+        default=None,
+        min_length=4,
+        max_length=4,
+    )
 
 
 class DetectBoardApiRequest(BaseModel):
@@ -434,6 +441,7 @@ def create_app() -> FastAPI:
         request = CoachingRequest(
             image=_decode_image_base64(payload.image_base64),
             white_king_start_click=_to_image_click(payload.white_king_start_click),
+            board_corners=_to_image_click_list(payload.board_corners),
         )
         vision_result, warnings = run_vision(request)
         return {
@@ -451,26 +459,21 @@ def create_app() -> FastAPI:
         height, width = bgr.shape[:2]
         try:
             board_corners = detect_board_corners(bgr)
+            confidence = AUTO_BOARD_CONFIDENCE
+            warnings: list[PipelineWarning] = []
         except (BoardNotFoundError, ValueError):
-            return {
-                "status": "failed",
-                "detection": {
-                    "board_corners": None,
-                    "confidence": 0.0,
-                    "image_width": width,
-                    "image_height": height,
-                },
-                "warnings": serialize_pipeline_value([LOW_CONFIDENCE_WARNING]),
-            }
+            board_corners = _fallback_board_corners(width, height)
+            confidence = FALLBACK_BOARD_CONFIDENCE
+            warnings = [LOW_CONFIDENCE_WARNING]
         return {
             "status": "success",
             "detection": {
                 "board_corners": serialize_pipeline_value(board_corners.tolist()),
-                "confidence": 1.0,
+                "confidence": confidence,
                 "image_width": width,
                 "image_height": height,
             },
-            "warnings": [],
+            "warnings": serialize_pipeline_value(warnings),
         }
 
     @app.post("/complete-position")
@@ -697,6 +700,30 @@ def _decode_image_base64_to_bgr(image_base64: str) -> np.ndarray:
 def _to_image_click(click: ApiImageClick) -> ImageClick:
     """Convert an API click model into the pipeline dataclass."""
     return ImageClick(x=click.x, y=click.y)
+
+
+def _to_image_click_list(
+    clicks: list[ApiImageClick] | None,
+) -> list[ImageClick] | None:
+    """Convert an optional list of API click models into pipeline dataclasses."""
+    if clicks is None:
+        return None
+    return [_to_image_click(click) for click in clicks]
+
+
+def _fallback_board_corners(width: int, height: int) -> np.ndarray:
+    """Return a permissive inset image rectangle for manual board correction."""
+    inset_x = max(width * 0.06, 8.0)
+    inset_y = max(height * 0.06, 8.0)
+    return np.array(
+        [
+            [inset_x, inset_y],
+            [width - inset_x, inset_y],
+            [width - inset_x, height - inset_y],
+            [inset_x, height - inset_y],
+        ],
+        dtype=np.float32,
+    )
 
 
 def _completed_position_from_fen(fen: str) -> CompletedPosition:

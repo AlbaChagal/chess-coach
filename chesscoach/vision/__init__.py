@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import numpy as np
+
 from chesscoach.vision.board_detector import BoardNotFoundError
 from chesscoach.vision.board_localizer import BoardCornerLocalizer
 from chesscoach.vision.piece_classifier import PieceClassifier
@@ -45,6 +47,7 @@ class BoardVision:
         self,
         image_path: Path,
         white_king_start_click: tuple[float, float] | None = None,
+        board_corners: list[tuple[float, float]] | None = None,
     ) -> str:
         """Return the FEN piece-placement string for the board shown in *image_path*.
 
@@ -52,6 +55,8 @@ class BoardVision:
             image_path: Path to a PNG or JPEG image of a chess board.
             white_king_start_click: Optional raw image click used to orient the
                 board so the white king start square becomes e1 at the bottom.
+            board_corners: Optional user-corrected board corners in raw image
+                coordinates ordered as top-left, top-right, bottom-right, bottom-left.
 
         Returns:
             FEN piece-placement string.
@@ -65,4 +70,5 @@ class BoardVision:
             self._classifier,
             self._board_localizer,
             white_king_start_click,
+            None if board_corners is None else np.array(board_corners, dtype=np.float32),
         )

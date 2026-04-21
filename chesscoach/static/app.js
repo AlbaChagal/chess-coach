@@ -175,6 +175,9 @@
       imageFile: null,
       imageDataUrl: "",
       detection: null,
+      draggingCornerIndex: null,
+      draggingPointerId: null,
+      suppressStageClick: false,
       selectedClick: null,
       selectedSquare: null,
       sideToMove: null,
@@ -225,6 +228,60 @@
     } catch (_error) {
       // Ignore storage failures so reset still works.
     }
+  }
+
+  function cloneBoardCorners(corners) {
+    return (corners || []).map((point) => [point[0], point[1]]);
+  }
+
+  function normalizeDetection(detection) {
+    if (!detection) {
+      return null;
+    }
+    return {
+      ...detection,
+      board_corners: cloneBoardCorners(detection.board_corners),
+      original_board_corners: cloneBoardCorners(detection.board_corners),
+    };
+  }
+
+  function setElementVisibility(element, visible) {
+    if (!element) {
+      return;
+    }
+    if (visible) {
+      element.removeAttribute("hidden");
+      return;
+    }
+    element.setAttribute("hidden", "");
+  }
+
+  function normalizeAnalysisResult(result) {
+    if (!result || typeof result !== "object") {
+      return {
+        fen: "",
+        top_moves: [],
+        engine_depth: null,
+        analysis_latency_ms: null,
+        analysis_status: "success",
+      };
+    }
+    const topMoves = Array.isArray(result.top_moves) ? result.top_moves : [];
+    return {
+      ...result,
+      top_moves: topMoves.map((move) => ({
+        move_san: move?.move_san || "",
+        move_uci: move?.move_uci || "",
+        score_cp: move?.score_cp ?? null,
+        score_mate: move?.score_mate ?? null,
+        depth: move?.depth ?? null,
+        continuation: Array.isArray(move?.continuation) ? move.continuation : [],
+        continuation_uci: Array.isArray(move?.continuation_uci)
+          ? move.continuation_uci
+          : [],
+        score_display: move?.score_display || "?",
+      })),
+    };
   }
 
   function setupProfileApp(root) {
@@ -389,10 +446,17 @@
     const boardOutline = root.querySelector("[data-board-outline]");
     const selectedSquare = root.querySelector("[data-selected-square]");
     const selectedPoint = root.querySelector("[data-selected-point]");
+    const selectedMarker = root.querySelector("[data-selected-marker]");
+    const selectedMarkerPill = root.querySelector("[data-selected-marker-pill]");
+    const selectedMarkerText = root.querySelector("[data-selected-marker-text]");
+    const cornerHandles = Array.from(root.querySelectorAll("[data-corner-handle]"));
     const selectionNote = root.querySelector("[data-selection-note]");
+    const selectionBadge = root.querySelector("[data-selection-badge]");
+    const selectionBadgeSquare = root.querySelector("[data-selection-badge-square]");
     const sideNote = root.querySelector("[data-side-note]");
     const detectButton = root.querySelector("[data-detect-button]");
     const resetImageButton = root.querySelector("[data-reset-image-button]");
+    const resetCornersButton = root.querySelector("[data-reset-corners-button]");
     const flipButton = root.querySelector("[data-flip-button]");
     const orientationContinueButton = root.querySelector(
       "[data-orientation-continue-button]"
@@ -465,6 +529,7 @@
       }
       if (stage) {
         stage.classList.toggle("flipped", state.flipped);
+        stage.classList.toggle("dragging-corner", state.draggingCornerIndex !== null);
       }
 
       detectButton.disabled = !state.imageDataUrl;
@@ -482,6 +547,8 @@
       selectionNote.textContent = state.selectedSquare
         ? `Selected square: ${state.selectedSquare}.`
         : "No square selected yet.";
+      setElementVisibility(selectionBadge, !!state.selectedSquare);
+      selectionBadgeSquare.textContent = state.selectedSquare || "-";
       sideNote.textContent = state.sideToMove
         ? `${state.sideToMove === "w" ? "White" : "Black"} to move selected.`
         : "No side selected yet.";
@@ -495,10 +562,38 @@
           "points",
           state.detection.board_corners.map((point) => point.join(",")).join(" ")
         );
+        cornerHandles.forEach((handle, index) => {
+          const point = state.detection.board_corners[index];
+          setElementVisibility(handle, !!point);
+          if (!point) {
+            return;
+          }
+          handle.setAttribute("cx", String(point[0]));
+          handle.setAttribute("cy", String(point[1]));
+        });
+      } else {
+        cornerHandles.forEach((handle) => {
+          setElementVisibility(handle, false);
+        });
       }
 
-      selectedSquare.hidden = state.selectedClick === null;
-      selectedPoint.hidden = state.selectedClick === null;
+      setElementVisibility(
+        selectedSquare,
+        !!(
+          state.selectedClick &&
+          state.detection &&
+          state.selectedSquare
+        )
+      );
+      setElementVisibility(selectedPoint, !!state.selectedClick);
+      setElementVisibility(
+        selectedMarker,
+        !!(
+          state.selectedClick &&
+          state.detection &&
+          state.selectedSquare
+        )
+      );
 
       if (state.selectedClick) {
         selectedPoint.setAttribute("cx", String(state.selectedClick.x));
@@ -511,6 +606,27 @@
           "points",
           polygonPoints.map((point) => point.join(",")).join(" ")
         );
+        const markerText = state.selectedSquare.toUpperCase();
+        const markerX = Math.max(
+          18,
+          Math.min(
+            state.detection.image_width - 98,
+            state.selectedClick.x + 18
+          )
+        );
+        const markerY = Math.max(28, state.selectedClick.y - 18);
+        selectedMarker.setAttribute(
+          "transform",
+          `translate(${markerX}, ${markerY})`
+        );
+        selectedMarkerText.textContent = markerText;
+        selectedMarkerText.setAttribute("x", "14");
+        selectedMarkerText.setAttribute("y", "24");
+        const markerWidth = Math.max(54, markerText.length * 14 + 18);
+        selectedMarkerPill.setAttribute("x", "0");
+        selectedMarkerPill.setAttribute("y", "0");
+        selectedMarkerPill.setAttribute("width", String(markerWidth));
+        selectedMarkerPill.setAttribute("height", "32");
       }
 
       if (state.completedPosition) {
@@ -725,6 +841,9 @@
       state.imageFile = nextState.imageFile;
       state.imageDataUrl = nextState.imageDataUrl;
       state.detection = nextState.detection;
+      state.draggingCornerIndex = nextState.draggingCornerIndex;
+      state.draggingPointerId = nextState.draggingPointerId;
+      state.suppressStageClick = nextState.suppressStageClick;
       state.selectedClick = nextState.selectedClick;
       state.selectedSquare = nextState.selectedSquare;
       state.sideToMove = nextState.sideToMove;
@@ -769,6 +888,9 @@
         state.imageFile = file;
         state.imageDataUrl = String(reader.result || "");
         state.detection = nextState.detection;
+        state.draggingCornerIndex = nextState.draggingCornerIndex;
+        state.draggingPointerId = nextState.draggingPointerId;
+        state.suppressStageClick = nextState.suppressStageClick;
         state.selectedClick = nextState.selectedClick;
         state.selectedSquare = nextState.selectedSquare;
         state.sideToMove = nextState.sideToMove;
@@ -808,14 +930,20 @@
               "The board could not be detected. Please try to upload a clearer image."
           );
           state.step = "orientation";
-          state.detection = payload.detection || null;
+          state.detection = normalizeDetection(payload.detection || null);
           render();
           return;
         }
-        state.detection = payload.detection;
+        state.detection = normalizeDetection(payload.detection);
+        state.draggingCornerIndex = null;
+        state.draggingPointerId = null;
+        state.suppressStageClick = false;
         state.selectedClick = null;
         state.selectedSquare = null;
         state.step = "orientation";
+        if (payload.warnings && payload.warnings.length > 0) {
+          showError(detectError, payload.warnings[0].message);
+        }
         render();
       } catch (_error) {
         showError(
@@ -849,8 +977,102 @@
       return { x, y };
     }
 
+    function clampPointToImage(point) {
+      return {
+        x: Math.max(0, Math.min(state.detection.image_width, point.x)),
+        y: Math.max(0, Math.min(state.detection.image_height, point.y)),
+      };
+    }
+
+    function nearestCornerIndex(point) {
+      if (!state.detection || !state.detection.board_corners) {
+        return null;
+      }
+      const threshold =
+        Math.max(state.detection.image_width, state.detection.image_height) * 0.08;
+      let bestIndex = null;
+      let bestDistance = threshold;
+      state.detection.board_corners.forEach((corner, index) => {
+        const dx = corner[0] - point.x;
+        const dy = corner[1] - point.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance <= bestDistance) {
+          bestDistance = distance;
+          bestIndex = index;
+        }
+      });
+      return bestIndex;
+    }
+
+    function handleStagePointerDown(event) {
+      if (!state.detection || !state.detection.board_corners) {
+        return;
+      }
+      const point = imagePointFromEvent(event);
+      if (!point) {
+        return;
+      }
+      const cornerIndex = nearestCornerIndex(point);
+      if (cornerIndex === null) {
+        return;
+      }
+      state.draggingCornerIndex = cornerIndex;
+      state.draggingPointerId = event.pointerId;
+      state.suppressStageClick = true;
+      stage.setPointerCapture?.(event.pointerId);
+      render();
+    }
+
+    function handleStagePointerMove(event) {
+      if (
+        state.draggingCornerIndex === null ||
+        state.draggingPointerId !== event.pointerId ||
+        !state.detection ||
+        !state.detection.board_corners
+      ) {
+        return;
+      }
+      const point = imagePointFromEvent(event);
+      if (!point) {
+        return;
+      }
+      const clamped = clampPointToImage(point);
+      state.detection.board_corners[state.draggingCornerIndex] = [
+        clamped.x,
+        clamped.y,
+      ];
+      render();
+    }
+
+    function handleStagePointerUp(event) {
+      if (state.draggingPointerId !== event.pointerId) {
+        return;
+      }
+      stage.releasePointerCapture?.(event.pointerId);
+      state.draggingCornerIndex = null;
+      state.draggingPointerId = null;
+      window.setTimeout(() => {
+        state.suppressStageClick = false;
+      }, 0);
+      render();
+    }
+
+    function resetBoardCorners() {
+      if (!state.detection || !state.detection.original_board_corners) {
+        return;
+      }
+      state.detection.board_corners = cloneBoardCorners(
+        state.detection.original_board_corners
+      );
+      clearError(detectError);
+      render();
+    }
+
     function handleStageClick(event) {
       if (!state.detection || !state.detection.board_corners) {
+        return;
+      }
+      if (state.suppressStageClick) {
         return;
       }
       clearError(detectError);
@@ -906,6 +1128,10 @@
           body: JSON.stringify({
             image_base64: state.imageDataUrl,
             white_king_start_click: state.selectedClick,
+            board_corners: state.detection?.board_corners?.map((point) => ({
+              x: point[0],
+              y: point[1],
+            })),
           }),
         });
         const visionPayload = await visionResponse.json();
@@ -963,6 +1189,7 @@
       clearError(analysisError);
       clearError(saveFeedback);
       render();
+      let payload;
       try {
         const response = await fetch(analyzeEndpoint, {
           method: "POST",
@@ -973,26 +1200,35 @@
             top_n: 3,
           }),
         });
-        const payload = await response.json();
+        payload = await response.json();
         if (!response.ok || payload.status !== "success") {
           showError(analysisError, payload.detail || "Unable to run engine analysis.");
           state.analysis.status = "failed";
           render();
           return;
         }
-        state.analysis = {
-          status: "success",
-          result: payload.analysis,
-          activeLineIndex: 0,
-          stepIndex: 0,
-          flipped: false,
-        };
-        state.explanation = createExplanationState();
-        render();
       } catch (_error) {
         showError(analysisError, "Unable to run engine analysis right now.");
         state.analysis.status = "failed";
         render();
+        return;
+      }
+      state.analysis = {
+        status: "success",
+        result: normalizeAnalysisResult(payload.analysis),
+        activeLineIndex: 0,
+        stepIndex: 0,
+        flipped: false,
+      };
+      state.explanation = createExplanationState();
+      try {
+        render();
+      } catch (_error) {
+        console.error("analysis render failed", _error, payload.analysis);
+        showError(
+          analysisError,
+          "Unable to update the analysis view right now. Please try again."
+        );
       }
     }
 
@@ -1172,7 +1408,7 @@
       state.completedPosition = snapshot.position || null;
       state.analysis = {
         status: "success",
-        result: snapshot.analysis,
+        result: normalizeAnalysisResult(snapshot.analysis),
         activeLineIndex: 0,
         stepIndex: 0,
         flipped: false,
@@ -1194,7 +1430,9 @@
 
     function renderLineList() {
       const analysis = state.analysis;
-      const topMoves = analysis.result.top_moves || [];
+      const topMoves = Array.isArray(analysis.result?.top_moves)
+        ? analysis.result.top_moves
+        : [];
       lineList.innerHTML = "";
       topMoves.forEach((move, index) => {
         const button = document.createElement("button");
@@ -1225,10 +1463,14 @@
       }
       const showNotation = loadSettings().showCoordinates;
       const orientation = state.analysis.flipped ? "black" : "white";
-      const previewFen =
-        (state.analysis.status === "success" ? currentPlaybackFen(state) : null) ||
-        state.completedPosition?.fen ||
-        STARTING_POSITION_FEN;
+      let previewFen = state.completedPosition?.fen || STARTING_POSITION_FEN;
+      if (state.analysis.status === "success") {
+        try {
+          previewFen = currentPlaybackFen(state) || previewFen;
+        } catch (error) {
+          console.error("analysis playback render failed", error, state.analysis);
+        }
+      }
       const boardReadyNow = rebuildBoard(
         analysisBoardElement,
         previewFen,
@@ -1271,6 +1513,9 @@
     }
 
     function renderArrow() {
+      if (!analysisArrow || !analysisArrowLayer || !analysisBoardElement) {
+        return;
+      }
       const arrowMove = currentArrowMove(state);
       if (!arrowMove) {
         analysisArrow.hidden = true;
@@ -1285,6 +1530,11 @@
         return;
       }
       const boardRect = analysisBoardElement.getBoundingClientRect();
+      if (boardRect.width <= 0 || boardRect.height <= 0) {
+        analysisArrow.hidden = true;
+        analysisArrowLayer.hidden = true;
+        return;
+      }
       const fromRect = fromSquare.getBoundingClientRect();
       const toRect = toSquare.getBoundingClientRect();
       analysisArrowLayer.setAttribute(
@@ -1312,7 +1562,7 @@
     }
 
     function currentLineMoves(state) {
-      if (!state.analysis.result) {
+      if (!state.analysis.result || !Array.isArray(state.analysis.result.top_moves)) {
         return [];
       }
       const move = state.analysis.result.top_moves[state.analysis.activeLineIndex];
@@ -1417,10 +1667,15 @@
       clearError(explanationError);
       render();
     });
-    root
-      .querySelector("[data-start-over-button]")
-      .addEventListener("click", resetToUpload);
+    root.querySelectorAll("[data-reset-flow-button]").forEach((button) => {
+      button.addEventListener("click", resetToUpload);
+    });
+    resetCornersButton.addEventListener("click", resetBoardCorners);
     stage.addEventListener("click", handleStageClick);
+    stage.addEventListener("pointerdown", handleStagePointerDown);
+    stage.addEventListener("pointermove", handleStagePointerMove);
+    stage.addEventListener("pointerup", handleStagePointerUp);
+    stage.addEventListener("pointercancel", handleStagePointerUp);
 
     sideButtons.forEach((button) => {
       button.addEventListener("click", () => {
