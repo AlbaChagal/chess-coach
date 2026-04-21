@@ -8,6 +8,17 @@ from typing import Literal
 from chesscoach.analysis.models import MoveAnalysis
 
 MoveLabel = Literal["brilliant", "best", "good", "inaccuracy", "mistake", "blunder"]
+IdeaKind = Literal[
+    "pawn_break",
+    "piece_improvement",
+    "king_safety",
+    "tactical_motif",
+    "file_control",
+    "square_control",
+    "trade_plan",
+    "promotion_race",
+    "defensive_resource",
+]
 
 
 @dataclass(frozen=True)
@@ -25,6 +36,68 @@ class TacticInfo:
 
     name: str         # "fork" | "pin" | "skewer" | "hanging_piece" | "discovered_attack" | "check"
     description: str  # Human-readable description, e.g. "Knight on e5 forks king and rook"
+
+
+@dataclass(frozen=True)
+class CandidateLine:
+    """Normalized engine candidate line for position-level reasoning."""
+
+    root_move_uci: str
+    root_move_san: str
+    score_cp: int | None
+    score_mate: int | None
+    depth: int
+    continuation_san: list[str]
+    continuation_uci: list[str]
+
+
+@dataclass(frozen=True)
+class LineFeature:
+    """Structured feature extracted from a single candidate line."""
+
+    kind: IdeaKind
+    label: str
+    ply_index: int | None
+    move_uci: str | None
+    move_san: str | None
+    description: str
+
+
+@dataclass(frozen=True)
+class RecurringIdea:
+    """Idea that appears across multiple candidate lines."""
+
+    kind: IdeaKind
+    label: str
+    evidence_lines: list[int]
+    support: float
+    description: str
+
+
+@dataclass(frozen=True)
+class PositionTheme:
+    """Synthesized summary of what the position is about."""
+
+    summary: str
+    recurring_ideas: list[RecurringIdea]
+    side_to_move_plan: str
+    opponent_counterplay: str
+    critical_decision: str | None
+    best_move_role: str
+    line_divergence_summary: str
+
+
+@dataclass(frozen=True)
+class StructuredPositionExplanation:
+    """Typed position-first explanation payload for product rendering."""
+
+    position_summary: str
+    main_ideas: list[str]
+    shared_plan: str
+    why_the_best_move_fits: str
+    what_all_good_lines_have_in_common: str
+    what_to_watch_out_for: str
+    candidate_move_roles: list[str]
 
 
 @dataclass(frozen=True)
