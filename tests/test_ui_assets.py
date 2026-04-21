@@ -58,6 +58,8 @@ def test_analysis_board_renderer_is_hardened_against_partial_dom_state() -> None
     assert 'console.error("analysis playback render failed", error, state.analysis);' in (
         script
     )
+    assert "function analysisLineMoves(state)" in script
+    assert "const moves = analysisLineMoves(state);" in script
     assert 'data-analysis-source-card' in template
     assert 'data-analysis-source-image' in template
     assert "function rebuildBoard(boardElement, fen, orientation, showNotation)" in script
@@ -66,12 +68,17 @@ def test_analysis_board_renderer_is_hardened_against_partial_dom_state() -> None
     assert 'const analysisArrowHead = root.querySelector("[data-analysis-arrow-head]");' in script
     assert 'analysisArrow.setAttribute(' in script
     assert 'analysisArrowHead.setAttribute(' in script
+    assert "function shouldUseOrthogonalArrow(piece)" in script
+    assert 'return piece === "N" || piece === "n";' in script
+    assert "piece: movingPieceAtSquare(boardState, move.from)," in script
     assert "const baseCenterX = toX - unitX * headLength;" in script
     assert '`M ${fromX} ${fromY} L ${midX} ${midY} L ${baseCenterX} ${baseCenterY}`' in script
+    assert '`M ${fromX} ${fromY} L ${baseCenterX} ${baseCenterY}`' in script
     assert '`M ${toX} ${toY} L ${leftX} ${leftY} L ${rightX} ${rightY} Z`' in script
     assert "setElementVisibility(analysisArrow, true);" in script
     assert "setElementVisibility(analysisArrowHead, true);" in script
     assert "setElementVisibility(analysisArrowLayer, true);" in script
+    assert "setElementVisibility(analysisSourceCard, !!state.imageDataUrl);" in script
     assert "grid-template-rows: repeat(8, minmax(0, 1fr));" in styles
     assert "min-height: 280px;" in styles
     assert ".analysis-square" in styles

@@ -44,6 +44,7 @@ class CoachingRequest:
     image: Path | bytes
     side_to_move: Literal["w", "b"] | None = None
     white_king_start_click: ImageClick | None = None
+    board_corners: list[ImageClick] | None = None
     castling_rights: str | None = None
     en_passant: str | None = None
     played_move_uci: str | None = None

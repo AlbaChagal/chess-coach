@@ -14,12 +14,13 @@ import uvicorn
 from playwright.sync_api import Page, expect
 
 from chesscoach.analysis.models import MoveAnalysis
-from chesscoach.pipeline_models import AnalysisResult, ImageClick, VisionResult
+from chesscoach.pipeline_models import AnalysisResult, VisionResult
 from chesscoach.server import create_app
 from tests.vision.conftest import make_synthetic_board
 
 STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 STARTING_PLACEMENT = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
+PIECE_ROUTING_FEN = "4k3/8/8/3p4/2B1P3/8/4N3/4K3 w - - 0 1"
 
 
 def _pick_free_port() -> int:
@@ -62,6 +63,44 @@ def _analysis_result() -> AnalysisResult:
         ],
         engine_depth=20,
         analysis_latency_ms=12.0,
+        analysis_status="success",
+    )
+
+
+def _piece_routing_analysis_result() -> AnalysisResult:
+    return AnalysisResult(
+        fen=PIECE_ROUTING_FEN,
+        top_moves=[
+            MoveAnalysis(
+                "Ng3",
+                "e2g3",
+                42,
+                None,
+                20,
+                ["Kf7"],
+                ["e8f7"],
+            ),
+            MoveAnalysis(
+                "Bxd5",
+                "c4d5",
+                31,
+                None,
+                20,
+                ["Kf8"],
+                ["e8f8"],
+            ),
+            MoveAnalysis(
+                "exd5",
+                "e4d5",
+                25,
+                None,
+                20,
+                ["Kf7"],
+                ["e8f7"],
+            ),
+        ],
+        engine_depth=20,
+        analysis_latency_ms=8.0,
         analysis_status="success",
     )
 
@@ -138,6 +177,71 @@ def live_server_url(
     thread.join(timeout=5)
 
 
+@pytest.fixture
+def piece_routing_server_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[str]:
+    monkeypatch.setenv("CHESSCOACH_AUTH_DB", str(tmp_path / "auth-piece-routing.db"))
+    monkeypatch.setenv("CHESSCOACH_SESSION_SECRET", "test-session-secret")
+
+    import chesscoach.server as server_module
+
+    monkeypatch.setattr(
+        server_module,
+        "detect_board_corners",
+        lambda _image: server_module.np.array(
+            [[0.0, 0.0], [511.0, 0.0], [511.0, 511.0], [0.0, 511.0]],
+            dtype=server_module.np.float32,
+        ),
+    )
+
+    def _run_vision(request):
+        return (
+            VisionResult(
+                fen_placement="4k3/8/8/3p4/2B1P3/8/4N3/4K3",
+                vision_confidence=1.0,
+                orientation_status="user_marked",
+                needs_user_confirmation=False,
+                white_king_start_click=request.white_king_start_click,
+            ),
+            [],
+        )
+
+    monkeypatch.setattr(server_module, "run_vision", _run_vision)
+    monkeypatch.setattr(
+        server_module,
+        "run_analysis",
+        lambda position, top_n: _piece_routing_analysis_result(),
+    )
+
+    app = create_app()
+    port = _pick_free_port()
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+
+    base_url = f"http://127.0.0.1:{port}"
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        try:
+            with urlopen(f"{base_url}/health") as response:
+                if response.status == 200:
+                    break
+        except OSError:
+            time.sleep(0.1)
+    else:
+        server.should_exit = True
+        thread.join(timeout=5)
+        raise RuntimeError("Timed out waiting for live server.")
+
+    yield base_url
+
+    server.should_exit = True
+    thread.join(timeout=5)
+
+
 def _sign_up_and_open_analyze(page: Page, live_server_url: str) -> None:
     page.goto(f"{live_server_url}/signup")
     page.locator('input[name="email"]').fill("user@example.com")
@@ -171,6 +275,20 @@ def _click_square(page: Page, image_locator: str, x_ratio: float, y_ratio: float
     )
 
 
+def _square_piece(page: Page, square: str) -> str:
+    return page.locator(f"[data-analysis-board] .square-{square} .piece-glyph").inner_text()
+
+
+def _capture_browser_errors(page: Page) -> list[str]:
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    page.on(
+        "console",
+        lambda msg: errors.append(msg.text) if msg.type == "error" else None,
+    )
+    return errors
+
+
 def test_orientation_click_shows_visible_selected_square_feedback(
     page: Page,
     live_server_url: str,
@@ -192,31 +310,45 @@ def test_analysis_flow_renders_board_and_top_lines(
     board_image_path: Path,
 ) -> None:
     _upload_and_detect_board(page, live_server_url, board_image_path)
+    expect(page.locator("[data-analysis-source-card]")).to_be_visible()
+    expect(page.locator("[data-analysis-source-image]")).to_have_attribute(
+        "src",
+        re.compile(r"data:image/png;base64,.*"),
+    )
 
     _click_square(page, "[data-image-stage]", 0.5625, 0.9375)
     page.locator("[data-orientation-continue-button]").click()
+    expect(page.locator("[data-analysis-source-card]")).to_be_visible()
     page.locator('[data-side-option="w"]').click()
     page.locator("[data-complete-button]").click()
     expect(page.locator("[data-ready-fen]")).to_contain_text(STARTING_FEN)
+    expect(page.locator("[data-analysis-source-card]")).to_be_visible()
 
     page.locator('[data-step-nav="orientation"]').click()
     expect(page.get_by_text("Where did the white king start the game?")).to_be_visible()
     expect(page.locator("[data-selection-badge-square]")).to_have_text("e1")
+    expect(page.locator("[data-analysis-source-card]")).to_be_visible()
 
     page.locator('[data-step-nav="side"]').click()
     expect(page.get_by_text("Who moves next?")).to_be_visible()
     expect(page.locator('[data-side-option="w"]')).to_have_class(
         re.compile(r".*\bactive\b.*")
     )
+    expect(page.locator("[data-analysis-source-card]")).to_be_visible()
 
     page.locator('[data-step-nav="ready"]').click()
     expect(page.locator("[data-ready-fen]")).to_contain_text(STARTING_FEN)
+    expect(page.locator("[data-analysis-source-card]")).to_be_visible()
 
     page.locator('[data-step-nav="upload"]').click()
     expect(page.get_by_role("heading", name="Load a Board Image")).to_be_visible()
     expect(page.locator("[data-image-preview-card]")).to_be_visible()
+    expect(page.locator("[data-analysis-source-card]")).to_be_visible()
 
-    page.locator('[data-step-nav="analysis"]').click()
+    page.locator('[data-step-nav="ready"]').click()
+    expect(page.locator("[data-ready-fen]")).to_contain_text(STARTING_FEN)
+
+    page.locator("[data-continue-to-analysis-button]").click()
     expect(page.locator("[data-analysis-layout]")).to_be_visible()
     expect(page.locator("[data-line-list] .line-card")).to_have_count(3)
     expect(page.locator("[data-analysis-board] .analysis-square")).to_have_count(64)
@@ -243,6 +375,99 @@ def test_analysis_flow_renders_board_and_top_lines(
         "d",
         re.compile(r".*Z"),
     )
+
+
+def test_analysis_arrows_only_bend_for_knights(
+    page: Page,
+    piece_routing_server_url: str,
+    board_image_path: Path,
+) -> None:
+    _upload_and_detect_board(page, piece_routing_server_url, board_image_path)
+
+    _click_square(page, "[data-image-stage]", 0.5625, 0.9375)
+    page.locator("[data-orientation-continue-button]").click()
+    page.locator('[data-side-option="w"]').click()
+    page.locator("[data-complete-button]").click()
+    expect(page.locator("[data-ready-fen]")).to_contain_text(PIECE_ROUTING_FEN)
+    page.locator("[data-continue-to-analysis-button]").click()
+
+    expect(page.locator("[data-analysis-layout]")).to_be_visible()
+
+    page.locator("[data-line-list] .line-card").nth(0).click()
+    knight_path = page.locator("[data-analysis-arrow]").get_attribute("d")
+    knight_head = page.locator("[data-analysis-arrow-head]").get_attribute("d")
+    assert knight_path is not None
+    assert knight_head is not None
+    assert knight_path.count("L") == 2
+    assert knight_head.endswith("Z")
+
+    page.locator("[data-line-list] .line-card").nth(1).click()
+    bishop_path = page.locator("[data-analysis-arrow]").get_attribute("d")
+    bishop_head = page.locator("[data-analysis-arrow-head]").get_attribute("d")
+    assert bishop_path is not None
+    assert bishop_head is not None
+    assert bishop_path.count("L") == 1
+    assert bishop_head.endswith("Z")
+
+    page.locator("[data-line-list] .line-card").nth(2).click()
+    pawn_path = page.locator("[data-analysis-arrow]").get_attribute("d")
+    pawn_head = page.locator("[data-analysis-arrow-head]").get_attribute("d")
+    assert pawn_path is not None
+    assert pawn_head is not None
+    assert pawn_path.count("L") == 1
+    assert pawn_head.endswith("Z")
+
+
+def test_analysis_playback_moves_board_forward_and_back(
+    page: Page,
+    live_server_url: str,
+    board_image_path: Path,
+) -> None:
+    browser_errors = _capture_browser_errors(page)
+    _upload_and_detect_board(page, live_server_url, board_image_path)
+
+    _click_square(page, "[data-image-stage]", 0.5625, 0.9375)
+    page.locator("[data-orientation-continue-button]").click()
+    page.locator('[data-side-option="w"]').click()
+    page.locator("[data-complete-button]").click()
+    expect(page.locator("[data-ready-fen]")).to_contain_text(STARTING_FEN)
+    page.locator('[data-step-nav="analysis"]').click()
+
+    page.wait_for_timeout(250)
+    assert browser_errors == []
+    expect(page.locator("[data-analysis-layout]")).to_be_visible()
+    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 0 of 4")
+    expect(page.locator("[data-analysis-arrow-head]")).not_to_have_attribute(
+        "hidden", ""
+    )
+    assert _square_piece(page, "e2") == "♙"
+    assert _square_piece(page, "e4") == ""
+
+    page.locator("[data-analysis-next-button]").click()
+
+    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 1 of 4")
+    expect(page.locator("[data-analysis-arrow-head]")).not_to_have_attribute(
+        "hidden", ""
+    )
+    assert _square_piece(page, "e2") == ""
+    assert _square_piece(page, "e4") == "♙"
+
+    page.locator("[data-analysis-next-button]").click()
+
+    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 2 of 4")
+    assert _square_piece(page, "e5") == "♟"
+
+    page.locator("[data-analysis-prev-button]").click()
+
+    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 1 of 4")
+    assert _square_piece(page, "e5") == ""
+    assert _square_piece(page, "e4") == "♙"
+
+    page.locator("[data-analysis-reset-button]").click()
+
+    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 0 of 4")
+    assert _square_piece(page, "e2") == "♙"
+    assert _square_piece(page, "e4") == ""
 
     page.locator("[data-line-list] .line-card").nth(2).click()
     expect(page.locator("[data-analysis-arrow-head]")).not_to_have_attribute(

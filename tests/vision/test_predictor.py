@@ -103,6 +103,28 @@ def test_detector_stub_produces_all_empty_fen(board_bytes: bytes) -> None:
     assert fen == "8/8/8/8/8/8/8/8"
 
 
+def test_predict_fen_uses_supplied_board_corners_without_detector_lookup(
+    monkeypatch,
+    board_bytes: bytes,
+) -> None:
+    supplied_corners = np.array(
+        [[0.0, 0.0], [255.0, 0.0], [255.0, 255.0], [0.0, 255.0]],
+        dtype=np.float32,
+    )
+
+    def _detect_board_corners(_image: np.ndarray) -> np.ndarray:
+        raise AssertionError("should not be called")
+
+    monkeypatch.setattr(
+        "chesscoach.vision.predictor.detect_board_corners",
+        _detect_board_corners,
+    )
+
+    fen = predict_fen(board_bytes, PieceDetector(), board_corners=supplied_corners)
+
+    assert fen == "8/8/8/8/8/8/8/8"
+
+
 def test_predict_fen_uses_default_board_localizer_when_available(
     monkeypatch,
     board_bytes: bytes,

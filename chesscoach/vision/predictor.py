@@ -130,6 +130,7 @@ def predict_fen(
     classifier: PieceDetector | _LegacyClassifier | _DetectorClassifier | None = None,
     board_localizer: BoardCornerLocalizer | None = None,
     white_king_start_click: tuple[float, float] | None = None,
+    board_corners: np.ndarray | None = None,
 ) -> str:
     """Detect the chess position in *image* and return a FEN piece-placement string.
 
@@ -144,6 +145,8 @@ def predict_fen(
         classifier: A detector or the legacy per-square classifier. Defaults to
             a stub detector (returns no detections) when no checkpoint has been
             loaded.
+        board_corners: Optional user-provided board corners ordered as top-left,
+            top-right, bottom-right, bottom-left in raw image coordinates.
 
     Returns:
         FEN piece-placement string (rank 8 first, rank 1 last).
@@ -159,21 +162,24 @@ def predict_fen(
     LOGGER.info("Starting FEN prediction")
     bgr = _to_bgr(image)
     if _is_detector_classifier(classifier):
-        if board_localizer is None:
-            board_localizer = _get_default_board_localizer()
-        board_corners = (
-            board_localizer.detect_corners(bgr)
-            if board_localizer is not None
-            else detect_board_corners(bgr)
-        )
-        board_corners = _orient_board_corners_from_white_king_click(
-            board_corners,
+        if board_corners is not None:
+            detected_corners = board_corners.astype(np.float32)
+        else:
+            if board_localizer is None:
+                board_localizer = _get_default_board_localizer()
+            detected_corners = (
+                board_localizer.detect_corners(bgr)
+                if board_localizer is not None
+                else detect_board_corners(bgr)
+            )
+        detected_corners = _orient_board_corners_from_white_king_click(
+            detected_corners,
             white_king_start_click,
         )
         detections = classifier.detect(bgr)
         square_candidates, _ = collect_square_candidates_via_homography(
             detections,
-            board_corners=board_corners,
+            board_corners=detected_corners,
             board_size=BOARD_SIZE,
             margin_ratio=DEFAULT_WARP_MARGIN_RATIO,
         )
@@ -182,17 +188,24 @@ def predict_fen(
         LOGGER.info(f"Finished detector-based FEN prediction: {fen}")
         return fen
 
-    warped = (
-        warp_board_from_corners(
+    if board_corners is not None:
+        warped = warp_board_from_corners(
+            bgr,
+            _orient_board_corners_from_white_king_click(
+                board_corners.astype(np.float32),
+                white_king_start_click,
+            ),
+        )
+    elif white_king_start_click is not None:
+        warped = warp_board_from_corners(
             bgr,
             _orient_board_corners_from_white_king_click(
                 detect_board_corners(bgr),
                 white_king_start_click,
             ),
         )
-        if white_king_start_click is not None
-        else detect_board(bgr)
-    )
+    else:
+        warped = detect_board(bgr)
     return _predict_with_legacy_classifier(warped, cast(_LegacyClassifier, classifier))
 
 

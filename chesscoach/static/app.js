@@ -556,10 +556,7 @@
       if (stageImage && state.imageDataUrl) {
         stageImage.src = state.imageDataUrl;
       }
-      setElementVisibility(
-        analysisSourceCard,
-        state.step === "analysis" && !!state.imageDataUrl
-      );
+      setElementVisibility(analysisSourceCard, !!state.imageDataUrl);
       if (analysisSourceImage && state.imageDataUrl) {
         analysisSourceImage.src = state.imageDataUrl;
       }
@@ -683,9 +680,36 @@
       playedToSelect.value = state.explanation.playedMove.to;
       playedPromotionSelect.value = state.explanation.playedMove.promotion;
 
-      renderPreviewBoard();
-      renderAnalysisState();
-      renderExplanationState();
+      try {
+        renderPreviewBoard();
+      } catch (error) {
+        console.error("preview board render failed", error, state.analysis);
+        showError(
+          analysisError,
+          "Board preview unavailable right now. Lines and scores are still available."
+        );
+        setElementVisibility(analysisArrow, false);
+        setElementVisibility(analysisArrowHead, false);
+        setElementVisibility(analysisArrowLayer, false);
+      }
+      try {
+        renderAnalysisState();
+      } catch (error) {
+        console.error("analysis state render failed", error, state.analysis);
+        showError(
+          analysisError,
+          "Unable to update the analysis view right now. Please try again."
+        );
+      }
+      try {
+        renderExplanationState();
+      } catch (error) {
+        console.error("explanation render failed", error, state.explanation);
+        showError(
+          explanationError,
+          "Unable to update the explanation view right now. Please try again."
+        );
+      }
       persistAnalyzeState(state);
     }
 
@@ -705,6 +729,7 @@
 
       renderLineList();
       renderPlaybackControls();
+      renderPreviewBoard();
     }
 
     function renderExplanationState() {
@@ -1579,81 +1604,83 @@
       ) {
         return;
       }
-      const arrowMove = currentArrowMove(state);
-      if (!arrowMove) {
+      try {
+        const arrowDescriptor = currentArrowMove(state);
+        if (!arrowDescriptor) {
+          setElementVisibility(analysisArrow, false);
+          setElementVisibility(analysisArrowHead, false);
+          setElementVisibility(analysisArrowLayer, false);
+          return;
+        }
+        const fromSquare = analysisBoardElement.querySelector(
+          `.square-${arrowDescriptor.from}`
+        );
+        const toSquare = analysisBoardElement.querySelector(
+          `.square-${arrowDescriptor.to}`
+        );
+        if (!fromSquare || !toSquare) {
+          setElementVisibility(analysisArrow, false);
+          setElementVisibility(analysisArrowHead, false);
+          setElementVisibility(analysisArrowLayer, false);
+          return;
+        }
+        const boardRect = analysisBoardElement.getBoundingClientRect();
+        if (boardRect.width <= 0 || boardRect.height <= 0) {
+          window.requestAnimationFrame(renderArrow);
+          return;
+        }
+        const fromRect = fromSquare.getBoundingClientRect();
+        const toRect = toSquare.getBoundingClientRect();
+        analysisArrowLayer.setAttribute(
+          "viewBox",
+          `0 0 ${boardRect.width} ${boardRect.height}`
+        );
+        const fromX = fromRect.left - boardRect.left + fromRect.width / 2;
+        const fromY = fromRect.top - boardRect.top + fromRect.height / 2;
+        const toX = toRect.left - boardRect.left + toRect.width / 2;
+        const toY = toRect.top - boardRect.top + toRect.height / 2;
+        const headLength = 12;
+        const headSpread = 8;
+        const useOrthogonalRoute = shouldUseOrthogonalArrow(arrowDescriptor.piece);
+        const horizontalFirst = Math.abs(fromX - toX) >= Math.abs(fromY - toY);
+        const midX = horizontalFirst ? toX : fromX;
+        const midY = horizontalFirst ? fromY : toY;
+        const prevX = useOrthogonalRoute ? midX : fromX;
+        const prevY = useOrthogonalRoute ? midY : fromY;
+        const deltaX = toX - prevX;
+        const deltaY = toY - prevY;
+        const magnitude = Math.hypot(deltaX, deltaY) || 1;
+        const unitX = deltaX / magnitude;
+        const unitY = deltaY / magnitude;
+        const perpX = -unitY;
+        const perpY = unitX;
+        const baseCenterX = toX - unitX * headLength;
+        const baseCenterY = toY - unitY * headLength;
+        const leftX = baseCenterX + perpX * headSpread;
+        const leftY = baseCenterY + perpY * headSpread;
+        const rightX = baseCenterX - perpX * headSpread;
+        const rightY = baseCenterY - perpY * headSpread;
+        const shaftPath = useOrthogonalRoute
+          ? `M ${fromX} ${fromY} L ${midX} ${midY} L ${baseCenterX} ${baseCenterY}`
+          : `M ${fromX} ${fromY} L ${baseCenterX} ${baseCenterY}`;
+        analysisArrow.setAttribute("d", shaftPath);
+        analysisArrowHead.setAttribute(
+          "d",
+          `M ${toX} ${toY} L ${leftX} ${leftY} L ${rightX} ${rightY} Z`
+        );
+        setElementVisibility(analysisArrow, true);
+        setElementVisibility(analysisArrowHead, true);
+        setElementVisibility(analysisArrowLayer, true);
+      } catch (error) {
+        console.error("analysis arrow render failed", error, state.analysis);
         setElementVisibility(analysisArrow, false);
         setElementVisibility(analysisArrowHead, false);
         setElementVisibility(analysisArrowLayer, false);
-        return;
       }
-      const fromSquare = analysisBoardElement.querySelector(`.square-${arrowMove.from}`);
-      const toSquare = analysisBoardElement.querySelector(`.square-${arrowMove.to}`);
-      if (!fromSquare || !toSquare) {
-        setElementVisibility(analysisArrow, false);
-        setElementVisibility(analysisArrowHead, false);
-        setElementVisibility(analysisArrowLayer, false);
-        return;
-      }
-      const boardRect = analysisBoardElement.getBoundingClientRect();
-      if (boardRect.width <= 0 || boardRect.height <= 0) {
-        setElementVisibility(analysisArrow, false);
-        setElementVisibility(analysisArrowHead, false);
-        setElementVisibility(analysisArrowLayer, false);
-        return;
-      }
-      const fromRect = fromSquare.getBoundingClientRect();
-      const toRect = toSquare.getBoundingClientRect();
-      analysisArrowLayer.setAttribute(
-        "viewBox",
-        `0 0 ${boardRect.width} ${boardRect.height}`
-      );
-      const fromX = fromRect.left - boardRect.left + fromRect.width / 2;
-      const fromY = fromRect.top - boardRect.top + fromRect.height / 2;
-      const toX = toRect.left - boardRect.left + toRect.width / 2;
-      const toY = toRect.top - boardRect.top + toRect.height / 2;
-      const headLength = 12;
-      const headSpread = 8;
-      const isStraightMove = Math.abs(fromX - toX) < 0.5 || Math.abs(fromY - toY) < 0.5;
-      const horizontalFirst = Math.abs(fromX - toX) >= Math.abs(fromY - toY);
-      const midX = horizontalFirst ? toX : fromX;
-      const midY = horizontalFirst ? fromY : toY;
-      const prevX = isStraightMove ? fromX : midX;
-      const prevY = isStraightMove ? fromY : midY;
-      const deltaX = toX - prevX;
-      const deltaY = toY - prevY;
-      const magnitude = Math.hypot(deltaX, deltaY) || 1;
-      const unitX = deltaX / magnitude;
-      const unitY = deltaY / magnitude;
-      const perpX = -unitY;
-      const perpY = unitX;
-      const baseCenterX = toX - unitX * headLength;
-      const baseCenterY = toY - unitY * headLength;
-      const leftX = baseCenterX + perpX * headSpread;
-      const leftY = baseCenterY + perpY * headSpread;
-      const rightX = baseCenterX - perpX * headSpread;
-      const rightY = baseCenterY - perpY * headSpread;
-      const shaftPath = isStraightMove
-        ? `M ${fromX} ${fromY} L ${baseCenterX} ${baseCenterY}`
-        : `M ${fromX} ${fromY} L ${midX} ${midY} L ${baseCenterX} ${baseCenterY}`;
-      analysisArrow.setAttribute("d", shaftPath);
-      analysisArrowHead.setAttribute(
-        "d",
-        `M ${toX} ${toY} L ${leftX} ${leftY} L ${rightX} ${rightY} Z`
-      );
-      setElementVisibility(analysisArrow, true);
-      setElementVisibility(analysisArrowHead, true);
-      setElementVisibility(analysisArrowLayer, true);
     }
 
     function currentLineMoves(state) {
-      if (!state.analysis.result || !Array.isArray(state.analysis.result.top_moves)) {
-        return [];
-      }
-      const move = state.analysis.result.top_moves[state.analysis.activeLineIndex];
-      if (!move) {
-        return [];
-      }
-      return [move.move_uci].concat(move.continuation_uci || []);
+      return analysisLineMoves(state);
     }
 
     function currentPlaybackFen(state) {
@@ -1664,11 +1691,19 @@
       if (!state.completedPosition || !state.analysis.result) {
         return null;
       }
+      const boardState = playbackState(state);
       const moves = currentLineMoves(state);
       if (state.analysis.stepIndex >= moves.length) {
         return null;
       }
-      return uciToMove(moves[state.analysis.stepIndex]);
+      const move = uciToMove(moves[state.analysis.stepIndex]);
+      if (!move) {
+        return null;
+      }
+      return {
+        ...move,
+        piece: movingPieceAtSquare(boardState, move.from),
+      };
     }
 
     function playedMoveUci() {
@@ -1889,12 +1924,23 @@
       .map((rank) => rank.slice().reverse());
   }
 
+  function analysisLineMoves(state) {
+    if (!state.analysis.result || !Array.isArray(state.analysis.result.top_moves)) {
+      return [];
+    }
+    const move = state.analysis.result.top_moves[state.analysis.activeLineIndex];
+    if (!move) {
+      return [];
+    }
+    return [move.move_uci].concat(move.continuation_uci || []);
+  }
+
   function playbackState(state) {
     if (!state.completedPosition) {
-      return { fen: "8/8/8/8/8/8/8/8 w - - 0 1" };
+      return boardStateFromFen("8/8/8/8/8/8/8/8 w - - 0 1");
     }
     let boardState = boardStateFromFen(state.completedPosition.fen);
-    const moves = currentLineMoves(state);
+    const moves = analysisLineMoves(state);
     for (let index = 0; index < state.analysis.stepIndex; index += 1) {
       const move = moves[index];
       if (!move) {
@@ -1903,6 +1949,8 @@
       boardState = applyUciMove(boardState, move);
     }
     return {
+      placement: boardState.placement,
+      turn: boardState.turn,
       fen: fenFromBoardState(boardState),
     };
   }
@@ -1994,6 +2042,18 @@
 
   function squareToIndices(square) {
     return [8 - Number(square[1]), FILES.indexOf(square[0])];
+  }
+
+  function movingPieceAtSquare(boardState, square) {
+    const [row, col] = squareToIndices(square);
+    if (row < 0 || row >= 8 || col < 0 || col >= 8) {
+      return null;
+    }
+    return boardState.placement[row][col];
+  }
+
+  function shouldUseOrthogonalArrow(piece) {
+    return piece === "N" || piece === "n";
   }
 
   function indexToSquare(index) {
