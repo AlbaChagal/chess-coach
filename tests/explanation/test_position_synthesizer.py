@@ -5,9 +5,11 @@ from __future__ import annotations
 import pytest
 
 from chesscoach.analysis.models import MoveAnalysis
-from chesscoach.explanation.models import CandidateLine
+from chesscoach.explanation.models import CandidateLine, LineFeature
 from chesscoach.explanation.position_synthesizer import (
     candidate_line_has_aligned_continuations,
+    extract_line_features,
+    extract_line_features_for_lines,
     normalize_move_analyses,
     normalize_move_analysis,
 )
@@ -145,3 +147,163 @@ def test_normalize_move_analysis_rejects_missing_root_move(
 
     with pytest.raises(ValueError, match=message):
         normalize_move_analysis(move)
+
+
+def test_extract_line_features_detects_root_pawn_break() -> None:
+    line = CandidateLine(
+        root_move_uci="f2f4",
+        root_move_san="f4",
+        score_cp=35,
+        score_mate=None,
+        depth=20,
+        continuation_san=[],
+        continuation_uci=[],
+    )
+
+    features = extract_line_features(line)
+
+    assert _feature_labels(features, "pawn_break") == ["f4 break"]
+    assert features[0].ply_index == 0
+    assert features[0].move_uci == "f2f4"
+
+
+def test_extract_line_features_detects_continuation_pawn_break() -> None:
+    line = CandidateLine(
+        root_move_uci="g1f3",
+        root_move_san="Nf3",
+        score_cp=35,
+        score_mate=None,
+        depth=20,
+        continuation_san=["d5", "f4"],
+        continuation_uci=["d7d5", "f2f4"],
+    )
+
+    features = extract_line_features(line)
+
+    pawn_breaks = [feature for feature in features if feature.kind == "pawn_break"]
+    assert pawn_breaks[-1].label == "f4 break"
+    assert pawn_breaks[-1].ply_index == 2
+    assert pawn_breaks[-1].move_uci == "f2f4"
+
+
+def test_extract_line_features_detects_castling() -> None:
+    line = CandidateLine(
+        root_move_uci="e1g1",
+        root_move_san="O-O",
+        score_cp=35,
+        score_mate=None,
+        depth=20,
+        continuation_san=[],
+        continuation_uci=[],
+    )
+
+    features = extract_line_features(line)
+
+    assert _feature_labels(features, "king_safety") == ["kingside castling"]
+
+
+def test_extract_line_features_detects_piece_improvement() -> None:
+    line = CandidateLine(
+        root_move_uci="g1f3",
+        root_move_san="Nf3",
+        score_cp=35,
+        score_mate=None,
+        depth=20,
+        continuation_san=[],
+        continuation_uci=[],
+    )
+
+    features = extract_line_features(line)
+
+    assert _feature_labels(features, "piece_improvement") == ["Nf3 development"]
+
+
+def test_extract_line_features_detects_tactical_motif_from_check() -> None:
+    line = CandidateLine(
+        root_move_uci="h5h7",
+        root_move_san="Qh7+",
+        score_cp=None,
+        score_mate=3,
+        depth=24,
+        continuation_san=[],
+        continuation_uci=[],
+    )
+
+    features = extract_line_features(line)
+
+    assert _feature_labels(features, "tactical_motif") == ["check"]
+
+
+def test_extract_line_features_collects_multiple_feature_families() -> None:
+    line = CandidateLine(
+        root_move_uci="g1f3",
+        root_move_san="Nf3",
+        score_cp=35,
+        score_mate=None,
+        depth=20,
+        continuation_san=["O-O", "f4"],
+        continuation_uci=["e8g8", "f2f4"],
+    )
+
+    features = extract_line_features(line)
+
+    assert _feature_labels(features, "piece_improvement") == ["Nf3 development"]
+    assert _feature_labels(features, "king_safety") == ["kingside castling"]
+    assert _feature_labels(features, "pawn_break") == ["f4 break"]
+
+
+def test_extract_line_features_uses_none_for_unaligned_continuation_uci() -> None:
+    line = CandidateLine(
+        root_move_uci="g1f3",
+        root_move_san="Nf3",
+        score_cp=35,
+        score_mate=None,
+        depth=20,
+        continuation_san=["O-O", "f4"],
+        continuation_uci=["e8g8"],
+    )
+
+    features = extract_line_features(line)
+
+    continuation_feature = next(
+        feature
+        for feature in features
+        if feature.ply_index == 1 and feature.kind == "king_safety"
+    )
+    assert continuation_feature.move_uci is None
+
+
+def test_extract_line_features_allows_empty_continuation() -> None:
+    line = CandidateLine(
+        root_move_uci="g1f3",
+        root_move_san="Nf3",
+        score_cp=35,
+        score_mate=None,
+        depth=20,
+        continuation_san=[],
+        continuation_uci=[],
+    )
+
+    features = extract_line_features(line)
+
+    assert len(features) == 1
+    assert features[0].label == "Nf3 development"
+
+
+def test_extract_line_features_for_lines_preserves_line_order() -> None:
+    lines = [
+        CandidateLine("g1f3", "Nf3", 35, None, 20, ["O-O"], ["e8g8"]),
+        CandidateLine("f2f4", "f4", 30, None, 20, [], []),
+    ]
+
+    features_by_line = extract_line_features_for_lines(lines)
+
+    assert len(features_by_line) == 2
+    assert _feature_labels(features_by_line[0], "piece_improvement") == [
+        "Nf3 development"
+    ]
+    assert _feature_labels(features_by_line[1], "pawn_break") == ["f4 break"]
+
+
+def _feature_labels(features: list[LineFeature], kind: str) -> list[str]:
+    return [feature.label for feature in features if feature.kind == kind]

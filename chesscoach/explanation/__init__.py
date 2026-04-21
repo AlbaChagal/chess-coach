@@ -29,6 +29,8 @@ from chesscoach.explanation.models import (
 )
 from chesscoach.explanation.position_synthesizer import (
     candidate_line_has_aligned_continuations,
+    extract_line_features,
+    extract_line_features_for_lines,
     normalize_move_analyses,
     normalize_move_analysis,
 )
@@ -55,6 +57,8 @@ __all__ = [
     "StructuredPlayedMoveExplanation",
     "TacticInfo",
     "candidate_line_has_aligned_continuations",
+    "extract_line_features",
+    "extract_line_features_for_lines",
     "normalize_move_analyses",
     "normalize_move_analysis",
 ]
