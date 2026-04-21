@@ -33,6 +33,8 @@ from chesscoach.explanation.position_synthesizer import (
     extract_line_features_for_lines,
     normalize_move_analyses,
     normalize_move_analysis,
+    synthesize_position_theme,
+    synthesize_recurring_ideas,
 )
 from chesscoach.explanation.providers import ClaudeProvider, LLMProvider, OpenAIProvider
 
@@ -61,6 +63,8 @@ __all__ = [
     "extract_line_features_for_lines",
     "normalize_move_analyses",
     "normalize_move_analysis",
+    "synthesize_position_theme",
+    "synthesize_recurring_ideas",
 ]
 
 

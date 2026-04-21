@@ -5,13 +5,15 @@ from __future__ import annotations
 import pytest
 
 from chesscoach.analysis.models import MoveAnalysis
-from chesscoach.explanation.models import CandidateLine, LineFeature
+from chesscoach.explanation.models import CandidateLine, LineFeature, PositionTheme
 from chesscoach.explanation.position_synthesizer import (
     candidate_line_has_aligned_continuations,
     extract_line_features,
     extract_line_features_for_lines,
     normalize_move_analyses,
     normalize_move_analysis,
+    synthesize_position_theme,
+    synthesize_recurring_ideas,
 )
 
 
@@ -303,6 +305,120 @@ def test_extract_line_features_for_lines_preserves_line_order() -> None:
         "Nf3 development"
     ]
     assert _feature_labels(features_by_line[1], "pawn_break") == ["f4 break"]
+
+
+def test_synthesize_recurring_ideas_detects_shared_pawn_break() -> None:
+    lines = [
+        CandidateLine("f2f4", "f4", 40, None, 20, [], []),
+        CandidateLine("g1f3", "Nf3", 35, None, 20, ["f4"], ["f2f4"]),
+        CandidateLine("b1c3", "Nc3", 30, None, 20, ["f4"], ["f2f4"]),
+    ]
+
+    recurring_ideas = synthesize_recurring_ideas(lines)
+
+    assert len(recurring_ideas) == 1
+    assert recurring_ideas[0].kind == "pawn_break"
+    assert recurring_ideas[0].label == "f4 break"
+    assert recurring_ideas[0].evidence_lines == [0, 1, 2]
+    assert recurring_ideas[0].support == 1.0
+
+
+def test_synthesize_recurring_ideas_deduplicates_within_single_line() -> None:
+    lines = [
+        CandidateLine("f2f4", "f4", 40, None, 20, ["f4"], ["f2f4"]),
+        CandidateLine("g1f3", "Nf3", 35, None, 20, ["f4"], ["f2f4"]),
+        CandidateLine("b1c3", "Nc3", 30, None, 20, [], []),
+    ]
+
+    recurring_ideas = synthesize_recurring_ideas(lines)
+
+    assert len(recurring_ideas) == 1
+    assert recurring_ideas[0].evidence_lines == [0, 1]
+    assert recurring_ideas[0].support == pytest.approx(2 / 3)
+
+
+def test_synthesize_position_theme_reports_strong_convergence() -> None:
+    lines = [
+        CandidateLine("e1g1", "O-O", 40, None, 20, ["f4"], ["f2f4"]),
+        CandidateLine("g1f3", "Nf3", 35, None, 20, ["O-O"], ["e8g8"]),
+        CandidateLine("b1c3", "Nc3", 30, None, 20, ["O-O"], ["e8g8"]),
+    ]
+
+    theme = synthesize_position_theme(lines)
+
+    assert isinstance(theme, PositionTheme)
+    assert theme.recurring_ideas
+    assert "share the same plan" in theme.line_divergence_summary
+
+
+def test_synthesize_position_theme_reports_distinct_plans_without_recurrence() -> None:
+    lines = [
+        CandidateLine("g1f3", "Nf3", 40, None, 20, [], []),
+        CandidateLine("e1g1", "O-O", 35, None, 20, [], []),
+        CandidateLine("f2f4", "f4", 30, None, 20, [], []),
+    ]
+
+    theme = synthesize_position_theme(lines)
+
+    assert theme.recurring_ideas == []
+    assert "distinct plans" in theme.summary
+    assert "distinct plans" in theme.line_divergence_summary
+    assert theme.critical_decision is not None
+
+
+def test_synthesize_position_theme_reports_partial_convergence() -> None:
+    lines = [
+        CandidateLine("f2f4", "f4", 40, None, 20, [], []),
+        CandidateLine("g1f3", "Nf3", 35, None, 20, ["f4"], ["f2f4"]),
+        CandidateLine("e1g1", "O-O", 30, None, 20, [], []),
+    ]
+
+    theme = synthesize_position_theme(lines)
+
+    assert len(theme.recurring_ideas) == 1
+    assert theme.recurring_ideas[0].support == pytest.approx(2 / 3)
+    assert "share an emphasis" in theme.summary
+    assert "execution differs" in theme.line_divergence_summary
+
+
+def test_synthesize_position_theme_prefers_earlier_best_move_support() -> None:
+    lines = [
+        CandidateLine("f2f4", "f4", 40, None, 20, [], []),
+        CandidateLine("g1f3", "Nf3", 35, None, 20, ["f4"], ["f2f4"]),
+        CandidateLine("b1c3", "Nc3", 30, None, 20, ["f4"], ["f2f4"]),
+    ]
+
+    theme = synthesize_position_theme(lines)
+
+    assert "more directly" in theme.best_move_role
+
+
+def test_synthesize_position_theme_uses_counterplay_fallback_when_unclear() -> None:
+    lines = [
+        CandidateLine("f2f4", "f4", 40, None, 20, [], []),
+        CandidateLine("g1f3", "Nf3", 35, None, 20, ["f4"], ["f2f4"]),
+        CandidateLine("b1c3", "Nc3", 30, None, 20, ["f4"], ["f2f4"]),
+    ]
+
+    theme = synthesize_position_theme(lines)
+
+    assert "No clear shared counterplay signal" in theme.opponent_counterplay
+
+
+def test_synthesize_recurring_ideas_returns_empty_for_empty_input() -> None:
+    assert synthesize_recurring_ideas([]) == []
+
+
+def test_synthesize_position_theme_rejects_empty_input() -> None:
+    with pytest.raises(ValueError, match="at least one line"):
+        synthesize_position_theme([])
+
+
+def test_synthesize_position_theme_rejects_mismatched_feature_input() -> None:
+    lines = [CandidateLine("f2f4", "f4", 40, None, 20, [], [])]
+
+    with pytest.raises(ValueError, match="Feature list count"):
+        synthesize_position_theme(lines, features_by_line=[[], []])
 
 
 def _feature_labels(features: list[LineFeature], kind: str) -> list[str]:

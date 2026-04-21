@@ -3,13 +3,34 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from chesscoach.analysis.models import MoveAnalysis
-from chesscoach.explanation.models import CandidateLine, LineFeature
+from chesscoach.explanation.models import (
+    CandidateLine,
+    IdeaKind,
+    LineFeature,
+    PositionTheme,
+    RecurringIdea,
+)
 
 _CHECK_OR_MATE_SUFFIXES = ("+", "#")
 _PIECE_SAN_PREFIXES = ("N", "B", "R", "Q")
 _SAN_ANNOTATION_PATTERN = re.compile(r"[+#?!]+$")
+_NO_COUNTERPLAY_TEXT = (
+    "No clear shared counterplay signal is visible from the current line features."
+)
+
+
+@dataclass(frozen=True)
+class _FeatureGroup:
+    """Grouped cross-line evidence for a recurring feature key."""
+
+    kind: IdeaKind
+    label: str
+    evidence_lines: list[int]
+    earliest_ply_indices: list[int]
+    description: str
 
 
 def normalize_move_analysis(move: MoveAnalysis) -> CandidateLine:
@@ -77,6 +98,53 @@ def extract_line_features_for_lines(
 ) -> list[list[LineFeature]]:
     """Extract deterministic features for multiple normalized candidate lines."""
     return [extract_line_features(line) for line in lines]
+
+
+def synthesize_recurring_ideas(
+    lines: list[CandidateLine],
+    features_by_line: list[list[LineFeature]] | None = None,
+) -> list[RecurringIdea]:
+    """Find ideas that recur across candidate lines."""
+    if not lines:
+        return []
+    normalized_features = _resolve_features_by_line(lines, features_by_line)
+    grouped_features = _group_features_by_recurrence_key(normalized_features)
+    recurring_ideas = _build_recurring_ideas(grouped_features, len(lines))
+    return recurring_ideas
+
+
+def synthesize_position_theme(
+    lines: list[CandidateLine],
+    features_by_line: list[list[LineFeature]] | None = None,
+) -> PositionTheme:
+    """Build a position-level summary from candidate lines and line features."""
+    if not lines:
+        raise ValueError("Position theme synthesis requires at least one line.")
+    normalized_features = _resolve_features_by_line(lines, features_by_line)
+    recurring_ideas = synthesize_recurring_ideas(lines, normalized_features)
+    divergence_class = _classify_line_divergence(recurring_ideas, len(lines))
+    return PositionTheme(
+        summary=_build_position_summary(recurring_ideas, divergence_class),
+        recurring_ideas=recurring_ideas,
+        side_to_move_plan=_build_side_to_move_plan(
+            lines,
+            normalized_features,
+            recurring_ideas,
+            divergence_class,
+        ),
+        opponent_counterplay=_build_opponent_counterplay(
+            normalized_features,
+            recurring_ideas,
+        ),
+        critical_decision=_build_critical_decision(recurring_ideas, divergence_class),
+        best_move_role=_build_best_move_role(
+            lines,
+            normalized_features,
+            recurring_ideas,
+            divergence_class,
+        ),
+        line_divergence_summary=_build_line_divergence_summary(divergence_class),
+    )
 
 
 def _extract_features_from_move(
@@ -186,3 +254,269 @@ def _king_safety_phrase(move_san: str) -> str:
 def _piece_improvement_label(move_san: str) -> str:
     """Return a concise development label for piece moves."""
     return f"{move_san} development"
+
+
+def _resolve_features_by_line(
+    lines: list[CandidateLine],
+    features_by_line: list[list[LineFeature]] | None,
+) -> list[list[LineFeature]]:
+    """Return line features, validating provided inputs when present."""
+    if features_by_line is None:
+        return extract_line_features_for_lines(lines)
+    if len(features_by_line) != len(lines):
+        raise ValueError("Feature list count must match line count.")
+    return features_by_line
+
+
+def _group_features_by_recurrence_key(
+    features_by_line: list[list[LineFeature]],
+) -> dict[tuple[IdeaKind, str], _FeatureGroup]:
+    """Group features by exact recurrence key with per-line deduplication."""
+    grouped: dict[tuple[IdeaKind, str], _FeatureGroup] = {}
+    for line_index, line_features in enumerate(features_by_line):
+        line_seen: set[tuple[IdeaKind, str]] = set()
+        ordered_features = sorted(
+            line_features,
+            key=lambda feature: (
+                feature.ply_index if feature.ply_index is not None else 10**6,
+                feature.kind,
+                feature.label,
+            ),
+        )
+        for feature in ordered_features:
+            key = (feature.kind, feature.label)
+            if key in line_seen:
+                continue
+            line_seen.add(key)
+            if key not in grouped:
+                grouped[key] = _FeatureGroup(
+                    kind=feature.kind,
+                    label=feature.label,
+                    evidence_lines=[line_index],
+                    earliest_ply_indices=[
+                        feature.ply_index if feature.ply_index is not None else 10**6
+                    ],
+                    description=feature.description,
+                )
+                continue
+            group = grouped[key]
+            grouped[key] = _FeatureGroup(
+                kind=group.kind,
+                label=group.label,
+                evidence_lines=[*group.evidence_lines, line_index],
+                earliest_ply_indices=[
+                    *group.earliest_ply_indices,
+                    feature.ply_index if feature.ply_index is not None else 10**6,
+                ],
+                description=group.description,
+            )
+    return grouped
+
+
+def _build_recurring_ideas(
+    grouped_features: dict[tuple[IdeaKind, str], _FeatureGroup],
+    line_count: int,
+) -> list[RecurringIdea]:
+    """Promote grouped features into recurring ideas using conservative rules."""
+    if line_count <= 1:
+        return []
+    minimum_support_lines = 2 if line_count >= 3 else line_count
+    ideas: list[RecurringIdea] = []
+    for group in grouped_features.values():
+        if len(group.evidence_lines) < minimum_support_lines:
+            continue
+        support = len(group.evidence_lines) / line_count
+        ideas.append(
+            RecurringIdea(
+                kind=group.kind,
+                label=group.label,
+                evidence_lines=group.evidence_lines,
+                support=support,
+                description=group.description,
+            )
+        )
+    return sorted(
+        ideas,
+        key=lambda idea: (
+            -idea.support,
+            _average_earliest_ply(grouped_features[(idea.kind, idea.label)]),
+            idea.label,
+        ),
+    )
+
+
+def _average_earliest_ply(group: _FeatureGroup) -> float:
+    """Return the average earliest ply index for a grouped feature."""
+    return sum(group.earliest_ply_indices) / len(group.earliest_ply_indices)
+
+
+def _classify_line_divergence(
+    recurring_ideas: list[RecurringIdea],
+    line_count: int,
+) -> str:
+    """Classify whether lines converge on one plan or diverge."""
+    if line_count <= 1:
+        return "distinct_plans"
+    if not recurring_ideas:
+        return "distinct_plans"
+    if recurring_ideas[0].support >= 0.75:
+        return "strong_convergence"
+    return "partial_convergence"
+
+
+def _build_position_summary(
+    recurring_ideas: list[RecurringIdea],
+    divergence_class: str,
+) -> str:
+    """Build a short position summary from recurring ideas."""
+    if not recurring_ideas:
+        return "The top candidate lines suggest distinct plans rather than one shared idea."
+    top_idea = recurring_ideas[0]
+    if divergence_class == "strong_convergence":
+        return f"The strongest lines all build toward {top_idea.label}."
+    return f"The top candidate lines share an emphasis on {top_idea.label}."
+
+
+def _build_side_to_move_plan(
+    lines: list[CandidateLine],
+    features_by_line: list[list[LineFeature]],
+    recurring_ideas: list[RecurringIdea],
+    divergence_class: str,
+) -> str:
+    """Describe what the side to move appears to be trying to achieve."""
+    if recurring_ideas:
+        if len(recurring_ideas) >= 2:
+            return (
+                f"The strong lines aim to combine {recurring_ideas[0].label} with "
+                f"{recurring_ideas[1].label}."
+            )
+        return f"The strong lines aim to support {recurring_ideas[0].label}."
+    best_line_features = features_by_line[0]
+    if best_line_features:
+        return (
+            "The best line emphasizes "
+            f"{best_line_features[0].label}, but the top options do not yet show "
+            "one shared plan."
+        )
+    return (
+        f"The best line starts with {lines[0].root_move_san}, but the top options "
+        "do not yet show one shared plan."
+    )
+
+
+def _build_opponent_counterplay(
+    features_by_line: list[list[LineFeature]],
+    recurring_ideas: list[RecurringIdea],
+) -> str:
+    """Describe the opponent's visible resources conservatively."""
+    tactical_ideas = [
+        idea for idea in recurring_ideas if idea.kind == "tactical_motif"
+    ]
+    if tactical_ideas:
+        return (
+            "The candidate lines repeatedly feature "
+            f"{tactical_ideas[0].label}, so forcing play needs attention."
+        )
+    continuation_tactical = any(
+        feature.kind == "tactical_motif" and (feature.ply_index or 0) > 0
+        for line_features in features_by_line
+        for feature in line_features
+    )
+    if continuation_tactical:
+        return "The continuations show forcing play that must be respected."
+    return _NO_COUNTERPLAY_TEXT
+
+
+def _build_critical_decision(
+    recurring_ideas: list[RecurringIdea],
+    divergence_class: str,
+) -> str | None:
+    """Describe the main strategic split only when the lines diverge."""
+    if divergence_class == "strong_convergence":
+        return None
+    if not recurring_ideas:
+        return (
+            "The main decision is which plan to prioritize, because the top lines "
+            "do not yet converge on one shared idea."
+        )
+    return (
+        "The main decision is how to balance "
+        f"{recurring_ideas[0].label} against the other candidate plans."
+    )
+
+
+def _build_best_move_role(
+    lines: list[CandidateLine],
+    features_by_line: list[list[LineFeature]],
+    recurring_ideas: list[RecurringIdea],
+    divergence_class: str,
+) -> str:
+    """Describe what the best move contributes relative to the shared plan."""
+    best_line = lines[0]
+    best_features = features_by_line[0]
+    if recurring_ideas:
+        top_idea = recurring_ideas[0]
+        best_feature = _find_feature_by_label(best_features, top_idea.label)
+        if best_feature is not None and _is_earliest_supporting_feature(
+            top_idea,
+            best_feature,
+            features_by_line,
+        ):
+            return (
+                f"The best move supports {top_idea.label} more directly than the "
+                "other leading candidates."
+            )
+        if best_feature is not None:
+            return (
+                f"The best move keeps the shared {top_idea.label} plan intact."
+            )
+    if best_features:
+        return (
+            f"The best move starts with {best_features[0].label}, making it the "
+            "engine's preferred route."
+        )
+    if divergence_class == "distinct_plans":
+        return (
+            f"The best move {best_line.root_move_san} is the engine's preferred "
+            "route among otherwise distinct candidate plans."
+        )
+    return f"The best move {best_line.root_move_san} fits the shared plan most directly."
+
+
+def _build_line_divergence_summary(divergence_class: str) -> str:
+    """Return a concise summary of line convergence vs divergence."""
+    if divergence_class == "strong_convergence":
+        return (
+            "The top lines mostly share the same plan and differ by move order or timing."
+        )
+    if divergence_class == "partial_convergence":
+        return "The top lines share some ideas, but the execution differs."
+    return "The top lines point to distinct plans rather than one common approach."
+
+
+def _find_feature_by_label(
+    features: list[LineFeature],
+    label: str,
+) -> LineFeature | None:
+    """Return the first feature with the requested label."""
+    for feature in features:
+        if feature.label == label:
+            return feature
+    return None
+
+
+def _is_earliest_supporting_feature(
+    idea: RecurringIdea,
+    best_feature: LineFeature,
+    features_by_line: list[list[LineFeature]],
+) -> bool:
+    """Return whether the best-line feature appears earlier than other support."""
+    best_ply = best_feature.ply_index if best_feature.ply_index is not None else 10**6
+    for line_index in idea.evidence_lines:
+        feature = _find_feature_by_label(features_by_line[line_index], idea.label)
+        if feature is None:
+            continue
+        ply_index = feature.ply_index if feature.ply_index is not None else 10**6
+        if ply_index < best_ply:
+            return False
+    return True
