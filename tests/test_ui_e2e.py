@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import socket
 import threading
 import time
@@ -198,9 +199,56 @@ def test_analysis_flow_renders_board_and_top_lines(
     page.locator("[data-complete-button]").click()
     expect(page.locator("[data-ready-fen]")).to_contain_text(STARTING_FEN)
 
-    page.locator("[data-continue-to-analysis-button]").click()
+    page.locator('[data-step-nav="orientation"]').click()
+    expect(page.get_by_text("Where did the white king start the game?")).to_be_visible()
+    expect(page.locator("[data-selection-badge-square]")).to_have_text("e1")
+
+    page.locator('[data-step-nav="side"]').click()
+    expect(page.get_by_text("Who moves next?")).to_be_visible()
+    expect(page.locator('[data-side-option="w"]')).to_have_class(
+        re.compile(r".*\bactive\b.*")
+    )
+
+    page.locator('[data-step-nav="ready"]').click()
+    expect(page.locator("[data-ready-fen]")).to_contain_text(STARTING_FEN)
+
+    page.locator('[data-step-nav="upload"]').click()
+    expect(page.get_by_role("heading", name="Load a Board Image")).to_be_visible()
+    expect(page.locator("[data-image-preview-card]")).to_be_visible()
+
+    page.locator('[data-step-nav="analysis"]').click()
     expect(page.locator("[data-analysis-layout]")).to_be_visible()
     expect(page.locator("[data-line-list] .line-card")).to_have_count(3)
     expect(page.locator("[data-analysis-board] .analysis-square")).to_have_count(64)
     expect(page.locator("[data-analysis-error]")).to_be_hidden()
     expect(page.locator("[data-explain-best-button]")).to_be_visible()
+    expect(page.locator("[data-analysis-source-card]")).to_be_visible()
+    expect(page.locator("[data-analysis-source-image]")).to_have_attribute(
+        "src",
+        re.compile(r"data:image/png;base64,.*"),
+    )
+    expect(page.locator("[data-analysis-arrow]")).not_to_have_attribute("hidden", "")
+    expect(page.locator("[data-analysis-arrow-layer]")).not_to_have_attribute(
+        "hidden", ""
+    )
+    expect(page.locator("[data-analysis-arrow-head]")).not_to_have_attribute(
+        "hidden", ""
+    )
+
+    page.locator("[data-line-list] .line-card").nth(1).click()
+    expect(page.locator("[data-analysis-arrow-head]")).not_to_have_attribute(
+        "hidden", ""
+    )
+    expect(page.locator("[data-analysis-arrow-head]")).to_have_attribute(
+        "d",
+        re.compile(r".*Z"),
+    )
+
+    page.locator("[data-line-list] .line-card").nth(2).click()
+    expect(page.locator("[data-analysis-arrow-head]")).not_to_have_attribute(
+        "hidden", ""
+    )
+    expect(page.locator("[data-analysis-arrow-head]")).to_have_attribute(
+        "d",
+        re.compile(r".*Z"),
+    )

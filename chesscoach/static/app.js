@@ -1,6 +1,7 @@
 (function () {
   const ANALYZE_STORAGE_KEY = "chesscoach-analyze-state";
   const SETTINGS_STORAGE_KEY = "chesscoach-ui-settings";
+  const STEP_ORDER = ["upload", "orientation", "side", "ready", "analysis"];
   const STARTING_POSITION_FEN =
     "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
   const FILES = "abcdefgh";
@@ -172,6 +173,7 @@
   function createAnalyzeState() {
     return {
       step: "upload",
+      furthestStep: "upload",
       imageFile: null,
       imageDataUrl: "",
       detection: null,
@@ -210,6 +212,7 @@
   function persistAnalyzeState(state) {
     const payload = {
       step: state.step,
+      furthestStep: state.furthestStep,
       completedPosition: state.completedPosition,
       savedSnapshotId: state.savedSnapshotId,
       analysis: state.analysis,
@@ -282,6 +285,27 @@
         score_display: move?.score_display || "?",
       })),
     };
+  }
+
+  function maxStep(stepA, stepB) {
+    return STEP_ORDER.indexOf(stepA) >= STEP_ORDER.indexOf(stepB) ? stepA : stepB;
+  }
+
+  function isStepReachable(state, step) {
+    switch (step) {
+      case "upload":
+        return true;
+      case "orientation":
+        return !!state.imageDataUrl && !!state.detection;
+      case "side":
+        return !!state.imageDataUrl && !!state.detection && !!state.selectedClick;
+      case "ready":
+        return !!state.completedPosition;
+      case "analysis":
+        return !!state.completedPosition;
+      default:
+        return false;
+    }
   }
 
   function setupProfileApp(root) {
@@ -400,6 +424,7 @@
     const restored = restoreAnalyzeState();
     if (restored) {
       state.step = restored.step || state.step;
+      state.furthestStep = restored.furthestStep || state.furthestStep;
       state.completedPosition = restored.completedPosition || null;
       state.savedSnapshotId = restored.savedSnapshotId || null;
       state.analysis = {
@@ -474,6 +499,7 @@
     const analysisBoardElement = root.querySelector("[data-analysis-board]");
     const analysisArrowLayer = root.querySelector("[data-analysis-arrow-layer]");
     const analysisArrow = root.querySelector("[data-analysis-arrow]");
+    const analysisArrowHead = root.querySelector("[data-analysis-arrow-head]");
     const analysisFlipButton = root.querySelector("[data-analysis-flip-button]");
     const analysisPrevButton = root.querySelector("[data-analysis-prev-button]");
     const analysisNextButton = root.querySelector("[data-analysis-next-button]");
@@ -509,6 +535,8 @@
     const comparisonSummary = root.querySelector("[data-comparison-summary]");
     const structuredDetails = root.querySelector("[data-structured-details]");
     const structuredContent = root.querySelector("[data-structured-content]");
+    const analysisSourceCard = root.querySelector("[data-analysis-source-card]");
+    const analysisSourceImage = root.querySelector("[data-analysis-source-image]");
 
     function render() {
       stepSections.forEach((section) => {
@@ -516,6 +544,7 @@
       });
       stepPills.forEach((pill) => {
         pill.classList.toggle("active", pill.dataset.stepPill === state.step);
+        pill.disabled = !isStepReachable(state, pill.dataset.stepPill);
       });
 
       if (previewCard) {
@@ -526,6 +555,13 @@
       }
       if (stageImage && state.imageDataUrl) {
         stageImage.src = state.imageDataUrl;
+      }
+      setElementVisibility(
+        analysisSourceCard,
+        state.step === "analysis" && !!state.imageDataUrl
+      );
+      if (analysisSourceImage && state.imageDataUrl) {
+        analysisSourceImage.src = state.imageDataUrl;
       }
       if (stage) {
         stage.classList.toggle("flipped", state.flipped);
@@ -634,9 +670,12 @@
         readyCastling.textContent = state.completedPosition.castling_rights;
         readyEnPassant.textContent = state.completedPosition.en_passant;
         continueToAnalysisButton.disabled = false;
+        state.furthestStep = maxStep(state.furthestStep, "ready");
       } else {
         continueToAnalysisButton.disabled = true;
       }
+
+      state.furthestStep = maxStep(state.furthestStep, state.step);
 
       saveButton.hidden = state.savedSnapshotId !== null;
       deleteSavedButton.hidden = state.savedSnapshotId === null;
@@ -1232,6 +1271,23 @@
       }
     }
 
+    function navigateToStep(step) {
+      if (!isStepReachable(state, step)) {
+        return;
+      }
+      if (step === "analysis") {
+        if (state.analysis.status === "success" || state.analysis.status === "loading") {
+          state.step = "analysis";
+          render();
+          return;
+        }
+        enterAnalysisMode();
+        return;
+      }
+      state.step = step;
+      render();
+    }
+
     async function requestExplanation(mode) {
       if (!state.completedPosition) {
         return;
@@ -1482,16 +1538,18 @@
           analysisError,
           "Board preview unavailable right now. Lines and scores are still available."
         );
-        analysisArrow.hidden = true;
-        analysisArrowLayer.hidden = true;
+        setElementVisibility(analysisArrow, false);
+        setElementVisibility(analysisArrowHead, false);
+        setElementVisibility(analysisArrowLayer, false);
         return;
       }
       if (state.analysis.status === "success") {
         renderArrow();
         return;
       }
-      analysisArrow.hidden = true;
-      analysisArrowLayer.hidden = true;
+      setElementVisibility(analysisArrow, false);
+      setElementVisibility(analysisArrowHead, false);
+      setElementVisibility(analysisArrowLayer, false);
     }
 
     function destroyBoard() {
@@ -1513,26 +1571,34 @@
     }
 
     function renderArrow() {
-      if (!analysisArrow || !analysisArrowLayer || !analysisBoardElement) {
+      if (
+        !analysisArrow ||
+        !analysisArrowHead ||
+        !analysisArrowLayer ||
+        !analysisBoardElement
+      ) {
         return;
       }
       const arrowMove = currentArrowMove(state);
       if (!arrowMove) {
-        analysisArrow.hidden = true;
-        analysisArrowLayer.hidden = true;
+        setElementVisibility(analysisArrow, false);
+        setElementVisibility(analysisArrowHead, false);
+        setElementVisibility(analysisArrowLayer, false);
         return;
       }
       const fromSquare = analysisBoardElement.querySelector(`.square-${arrowMove.from}`);
       const toSquare = analysisBoardElement.querySelector(`.square-${arrowMove.to}`);
       if (!fromSquare || !toSquare) {
-        analysisArrow.hidden = true;
-        analysisArrowLayer.hidden = true;
+        setElementVisibility(analysisArrow, false);
+        setElementVisibility(analysisArrowHead, false);
+        setElementVisibility(analysisArrowLayer, false);
         return;
       }
       const boardRect = analysisBoardElement.getBoundingClientRect();
       if (boardRect.width <= 0 || boardRect.height <= 0) {
-        analysisArrow.hidden = true;
-        analysisArrowLayer.hidden = true;
+        setElementVisibility(analysisArrow, false);
+        setElementVisibility(analysisArrowHead, false);
+        setElementVisibility(analysisArrowLayer, false);
         return;
       }
       const fromRect = fromSquare.getBoundingClientRect();
@@ -1541,24 +1607,42 @@
         "viewBox",
         `0 0 ${boardRect.width} ${boardRect.height}`
       );
-      analysisArrow.setAttribute(
-        "x1",
-        String(fromRect.left - boardRect.left + fromRect.width / 2)
+      const fromX = fromRect.left - boardRect.left + fromRect.width / 2;
+      const fromY = fromRect.top - boardRect.top + fromRect.height / 2;
+      const toX = toRect.left - boardRect.left + toRect.width / 2;
+      const toY = toRect.top - boardRect.top + toRect.height / 2;
+      const headLength = 12;
+      const headSpread = 8;
+      const isStraightMove = Math.abs(fromX - toX) < 0.5 || Math.abs(fromY - toY) < 0.5;
+      const horizontalFirst = Math.abs(fromX - toX) >= Math.abs(fromY - toY);
+      const midX = horizontalFirst ? toX : fromX;
+      const midY = horizontalFirst ? fromY : toY;
+      const prevX = isStraightMove ? fromX : midX;
+      const prevY = isStraightMove ? fromY : midY;
+      const deltaX = toX - prevX;
+      const deltaY = toY - prevY;
+      const magnitude = Math.hypot(deltaX, deltaY) || 1;
+      const unitX = deltaX / magnitude;
+      const unitY = deltaY / magnitude;
+      const perpX = -unitY;
+      const perpY = unitX;
+      const baseCenterX = toX - unitX * headLength;
+      const baseCenterY = toY - unitY * headLength;
+      const leftX = baseCenterX + perpX * headSpread;
+      const leftY = baseCenterY + perpY * headSpread;
+      const rightX = baseCenterX - perpX * headSpread;
+      const rightY = baseCenterY - perpY * headSpread;
+      const shaftPath = isStraightMove
+        ? `M ${fromX} ${fromY} L ${baseCenterX} ${baseCenterY}`
+        : `M ${fromX} ${fromY} L ${midX} ${midY} L ${baseCenterX} ${baseCenterY}`;
+      analysisArrow.setAttribute("d", shaftPath);
+      analysisArrowHead.setAttribute(
+        "d",
+        `M ${toX} ${toY} L ${leftX} ${leftY} L ${rightX} ${rightY} Z`
       );
-      analysisArrow.setAttribute(
-        "y1",
-        String(fromRect.top - boardRect.top + fromRect.height / 2)
-      );
-      analysisArrow.setAttribute(
-        "x2",
-        String(toRect.left - boardRect.left + toRect.width / 2)
-      );
-      analysisArrow.setAttribute(
-        "y2",
-        String(toRect.top - boardRect.top + toRect.height / 2)
-      );
-      analysisArrow.hidden = false;
-      analysisArrowLayer.hidden = false;
+      setElementVisibility(analysisArrow, true);
+      setElementVisibility(analysisArrowHead, true);
+      setElementVisibility(analysisArrowLayer, true);
     }
 
     function currentLineMoves(state) {
@@ -1669,6 +1753,11 @@
     });
     root.querySelectorAll("[data-reset-flow-button]").forEach((button) => {
       button.addEventListener("click", resetToUpload);
+    });
+    root.querySelectorAll("[data-step-nav]").forEach((button) => {
+      button.addEventListener("click", () => {
+        navigateToStep(button.dataset.stepNav);
+      });
     });
     resetCornersButton.addEventListener("click", resetBoardCorners);
     stage.addEventListener("click", handleStageClick);

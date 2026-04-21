@@ -28,11 +28,21 @@
       data-saved-endpoint-base="/api/saved"
     >
       <div class="step-indicator">
-        <span class="step-pill active" data-step-pill="upload">1. Image</span>
-        <span class="step-pill" data-step-pill="orientation">2. Orientation</span>
-        <span class="step-pill" data-step-pill="side">3. Side to move</span>
-        <span class="step-pill" data-step-pill="ready">4. Ready</span>
-        <span class="step-pill" data-step-pill="analysis">5. Analysis</span>
+        <button class="step-pill active" data-step-pill="upload" data-step-nav="upload" type="button">
+          1. Image
+        </button>
+        <button class="step-pill" data-step-pill="orientation" data-step-nav="orientation" type="button">
+          2. Orientation
+        </button>
+        <button class="step-pill" data-step-pill="side" data-step-nav="side" type="button">
+          3. Side to move
+        </button>
+        <button class="step-pill" data-step-pill="ready" data-step-nav="ready" type="button">
+          4. Ready
+        </button>
+        <button class="step-pill" data-step-pill="analysis" data-step-nav="analysis" type="button">
+          5. Analysis
+        </button>
       </div>
 
       <section class="board-panel analysis-preview-panel">
@@ -48,19 +58,8 @@
         <div class="analysis-board-shell" data-analysis-board-shell>
           <div class="analysis-board" data-analysis-board></div>
           <svg class="analysis-arrow-layer" data-analysis-arrow-layer hidden>
-            <defs>
-              <marker
-                id="analysis-arrow-head"
-                markerWidth="10"
-                markerHeight="10"
-                refX="8"
-                refY="5"
-                orient="auto"
-              >
-                <polygon points="0 0, 10 5, 0 10"></polygon>
-              </marker>
-            </defs>
-            <line data-analysis-arrow hidden></line>
+            <path data-analysis-arrow hidden></path>
+            <path data-analysis-arrow-head hidden></path>
           </svg>
         </div>
         <div class="analysis-playback">
@@ -77,6 +76,22 @@
         <p class="selection-note" data-analysis-step-note>
           Step 0 of 0
         </p>
+        <div class="analysis-source-card" data-analysis-source-card hidden>
+          <div class="analysis-source-copy">
+            <h3>Uploaded Position</h3>
+            <p class="screen-subheading">
+              Keep the original image visible while you compare it with the
+              digital board reconstruction.
+            </p>
+          </div>
+          <div class="analysis-source-image-frame">
+            <img
+              alt="Uploaded board reference"
+              class="analysis-source-image"
+              data-analysis-source-image
+            >
+          </div>
+        </div>
       </section>
 
       <section class="analyze-step" data-step="upload">

@@ -48,6 +48,7 @@ def test_analysis_success_path_uses_dedicated_render_error_message() -> None:
 def test_analysis_board_renderer_is_hardened_against_partial_dom_state() -> None:
     script = (PROJECT_ROOT / "chesscoach/static/app.js").read_text()
     styles = (PROJECT_ROOT / "chesscoach/static/app.css").read_text()
+    template = (PROJECT_ROOT / "chesscoach/templates/app_shell.html").read_text()
 
     assert (
         "Board preview unavailable right now. Lines and scores are still available."
@@ -57,12 +58,26 @@ def test_analysis_board_renderer_is_hardened_against_partial_dom_state() -> None
     assert 'console.error("analysis playback render failed", error, state.analysis);' in (
         script
     )
+    assert 'data-analysis-source-card' in template
+    assert 'data-analysis-source-image' in template
     assert "function rebuildBoard(boardElement, fen, orientation, showNotation)" in script
     assert "const squareIndex = (8 - rank) * 8 + fileIndex;" in script
     assert "pieceGlyph.textContent = piece ? PIECE_TO_GLYPH[piece] : \"\";" in script
+    assert 'const analysisArrowHead = root.querySelector("[data-analysis-arrow-head]");' in script
+    assert 'analysisArrow.setAttribute(' in script
+    assert 'analysisArrowHead.setAttribute(' in script
+    assert "const baseCenterX = toX - unitX * headLength;" in script
+    assert '`M ${fromX} ${fromY} L ${midX} ${midY} L ${baseCenterX} ${baseCenterY}`' in script
+    assert '`M ${toX} ${toY} L ${leftX} ${leftY} L ${rightX} ${rightY} Z`' in script
+    assert "setElementVisibility(analysisArrow, true);" in script
+    assert "setElementVisibility(analysisArrowHead, true);" in script
+    assert "setElementVisibility(analysisArrowLayer, true);" in script
     assert "grid-template-rows: repeat(8, minmax(0, 1fr));" in styles
     assert "min-height: 280px;" in styles
     assert ".analysis-square" in styles
+    assert ".analysis-arrow-layer [data-analysis-arrow]" in styles
+    assert ".analysis-arrow-layer [data-analysis-arrow-head]" in styles
+    assert ".analysis-source-card {" in styles
     assert "min-width: 0;" in styles
     assert "min-height: 0;" in styles
 
@@ -91,6 +106,18 @@ def test_reset_flow_buttons_are_bound_globally() -> None:
         script
     )
     assert 'button.addEventListener("click", resetToUpload);' in script
+
+
+def test_step_pills_are_clickable_navigation_controls() -> None:
+    script = (PROJECT_ROOT / "chesscoach/static/app.js").read_text()
+    template = (PROJECT_ROOT / "chesscoach/templates/app_shell.html").read_text()
+    styles = (PROJECT_ROOT / "chesscoach/static/app.css").read_text()
+
+    assert 'data-step-nav="upload"' in template
+    assert 'data-step-nav="analysis"' in template
+    assert "function navigateToStep(step)" in script
+    assert 'root.querySelectorAll("[data-step-nav]").forEach((button) => {' in script
+    assert ".step-pill:hover:not(:disabled)" in styles
 
 
 def test_orientation_manual_corner_correction_is_wired() -> None:
