@@ -27,6 +27,11 @@ from chesscoach.explanation.models import (
     StructuredPlayedMoveExplanation,
     TacticInfo,
 )
+from chesscoach.explanation.position_synthesizer import (
+    candidate_line_has_aligned_continuations,
+    normalize_move_analyses,
+    normalize_move_analysis,
+)
 from chesscoach.explanation.providers import ClaudeProvider, LLMProvider, OpenAIProvider
 
 __all__ = [
@@ -49,6 +54,9 @@ __all__ = [
     "StructuredPositionExplanation",
     "StructuredPlayedMoveExplanation",
     "TacticInfo",
+    "candidate_line_has_aligned_continuations",
+    "normalize_move_analyses",
+    "normalize_move_analysis",
 ]
 
 
