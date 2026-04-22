@@ -12,6 +12,7 @@ from chesscoach.explanation.models import (
     LineFeature,
     PositionTheme,
     RecurringIdea,
+    StructuredPositionExplanation,
 )
 
 _CHECK_OR_MATE_SUFFIXES = ("+", "#")
@@ -144,6 +145,31 @@ def synthesize_position_theme(
             divergence_class,
         ),
         line_divergence_summary=_build_line_divergence_summary(divergence_class),
+    )
+
+
+def build_structured_position_explanation(
+    lines: list[CandidateLine],
+    theme: PositionTheme | None = None,
+    features_by_line: list[list[LineFeature]] | None = None,
+) -> StructuredPositionExplanation:
+    """Convert synthesized line data into a product-facing position explanation."""
+    if not lines:
+        raise ValueError("Structured position explanation requires at least one line.")
+    normalized_features = _resolve_features_by_line(lines, features_by_line)
+    resolved_theme = theme or synthesize_position_theme(lines, normalized_features)
+    return StructuredPositionExplanation(
+        position_summary=resolved_theme.summary,
+        main_ideas=_build_main_ideas(lines, resolved_theme, normalized_features),
+        shared_plan=resolved_theme.side_to_move_plan,
+        why_the_best_move_fits=resolved_theme.best_move_role,
+        what_all_good_lines_have_in_common=_build_commonality_text(resolved_theme),
+        what_to_watch_out_for=resolved_theme.opponent_counterplay,
+        candidate_move_roles=_build_candidate_move_roles(
+            lines,
+            normalized_features,
+            resolved_theme,
+        ),
     )
 
 
@@ -492,6 +518,102 @@ def _build_line_divergence_summary(divergence_class: str) -> str:
     if divergence_class == "partial_convergence":
         return "The top lines share some ideas, but the execution differs."
     return "The top lines point to distinct plans rather than one common approach."
+
+
+def _build_main_ideas(
+    lines: list[CandidateLine],
+    theme: PositionTheme,
+    features_by_line: list[list[LineFeature]],
+) -> list[str]:
+    """Build short list-shaped teaching points for the position."""
+    if theme.recurring_ideas:
+        main_ideas = [
+            f"The strong lines repeatedly build toward {idea.label}."
+            for idea in theme.recurring_ideas[:3]
+        ]
+        if (
+            theme.critical_decision is not None
+            and len(main_ideas) < 3
+            and theme.line_divergence_summary
+        ):
+            main_ideas.append(theme.line_divergence_summary)
+        return main_ideas
+    best_line_features = features_by_line[0]
+    if best_line_features:
+        return [
+            f"The best line starts with {best_line_features[0].label}.",
+            "The top candidates do not yet converge on one shared plan.",
+        ]
+    return [
+        f"The best line starts with {lines[0].root_move_san}.",
+        "The top candidates do not yet converge on one shared plan.",
+    ]
+
+
+def _build_commonality_text(theme: PositionTheme) -> str:
+    """Summarize what the candidate lines have in common."""
+    if not theme.recurring_ideas:
+        return "The top lines do not share one strong common idea yet."
+    if len(theme.recurring_ideas) >= 2:
+        return (
+            f"The good lines all support {theme.recurring_ideas[0].label} and "
+            f"{theme.recurring_ideas[1].label}, even if they reach them by "
+            "different move orders."
+        )
+    if theme.line_divergence_summary.startswith("The top lines mostly share"):
+        return (
+            f"The good lines all support {theme.recurring_ideas[0].label}, even if "
+            "they differ by move order or timing."
+        )
+    return (
+        f"The good lines share {theme.recurring_ideas[0].label}, but the "
+        "execution differs."
+    )
+
+
+def _build_candidate_move_roles(
+    lines: list[CandidateLine],
+    features_by_line: list[list[LineFeature]],
+    theme: PositionTheme,
+) -> list[str]:
+    """Build one concise role sentence per candidate move."""
+    return [
+        _build_candidate_move_role(
+            line,
+            line_features,
+            theme,
+            is_best_move=index == 0,
+        )
+        for index, (line, line_features) in enumerate(zip(lines, features_by_line))
+    ]
+
+
+def _build_candidate_move_role(
+    line: CandidateLine,
+    line_features: list[LineFeature],
+    theme: PositionTheme,
+    *,
+    is_best_move: bool,
+) -> str:
+    """Build a concise role sentence for one candidate move."""
+    if theme.recurring_ideas:
+        top_idea = theme.recurring_ideas[0]
+        idea_feature = _find_feature_by_label(line_features, top_idea.label)
+        if idea_feature is not None:
+            if (idea_feature.ply_index or 0) == 0:
+                if is_best_move:
+                    return (
+                        f"{line.root_move_san} is the most direct route toward "
+                        f"{top_idea.label}."
+                    )
+                return f"{line.root_move_san} supports {top_idea.label} directly."
+            return (
+                f"{line.root_move_san} supports the same {top_idea.label} plan "
+                "more gradually."
+            )
+    if line_features:
+        return f"{line.root_move_san} emphasizes {line_features[0].label}."
+    return f"{line.root_move_san} is one of the engine's candidate plans."
 
 
 def _find_feature_by_label(

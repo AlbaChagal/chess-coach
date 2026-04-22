@@ -5,8 +5,14 @@ from __future__ import annotations
 import pytest
 
 from chesscoach.analysis.models import MoveAnalysis
-from chesscoach.explanation.models import CandidateLine, LineFeature, PositionTheme
+from chesscoach.explanation.models import (
+    CandidateLine,
+    LineFeature,
+    PositionTheme,
+    StructuredPositionExplanation,
+)
 from chesscoach.explanation.position_synthesizer import (
+    build_structured_position_explanation,
     candidate_line_has_aligned_continuations,
     extract_line_features,
     extract_line_features_for_lines,
@@ -419,6 +425,118 @@ def test_synthesize_position_theme_rejects_mismatched_feature_input() -> None:
 
     with pytest.raises(ValueError, match="Feature list count"):
         synthesize_position_theme(lines, features_by_line=[[], []])
+
+
+def test_build_structured_position_explanation_for_convergent_lines() -> None:
+    lines = [
+        CandidateLine("f2f4", "f4", 40, None, 20, [], []),
+        CandidateLine("g1f3", "Nf3", 35, None, 20, ["f4"], ["f2f4"]),
+        CandidateLine("b1c3", "Nc3", 30, None, 20, ["f4"], ["f2f4"]),
+    ]
+
+    explanation = build_structured_position_explanation(lines)
+
+    assert isinstance(explanation, StructuredPositionExplanation)
+    assert explanation.position_summary
+    assert explanation.main_ideas
+    assert "f4 break" in explanation.shared_plan
+    assert len(explanation.candidate_move_roles) == 3
+
+
+def test_build_structured_position_explanation_uses_fallback_for_distinct_plans() -> None:
+    lines = [
+        CandidateLine("g1f3", "Nf3", 40, None, 20, [], []),
+        CandidateLine("e1g1", "O-O", 35, None, 20, [], []),
+        CandidateLine("f2f4", "f4", 30, None, 20, [], []),
+    ]
+
+    explanation = build_structured_position_explanation(lines)
+
+    assert "do not share one strong common idea" in (
+        explanation.what_all_good_lines_have_in_common
+    )
+    assert "do not yet converge" in explanation.main_ideas[-1]
+    assert len(explanation.candidate_move_roles) == 3
+
+
+def test_build_structured_position_explanation_reflects_best_move_role() -> None:
+    lines = [
+        CandidateLine("f2f4", "f4", 40, None, 20, [], []),
+        CandidateLine("g1f3", "Nf3", 35, None, 20, ["f4"], ["f2f4"]),
+        CandidateLine("b1c3", "Nc3", 30, None, 20, ["f4"], ["f2f4"]),
+    ]
+
+    theme = synthesize_position_theme(lines)
+    explanation = build_structured_position_explanation(lines, theme=theme)
+
+    assert explanation.why_the_best_move_fits == theme.best_move_role
+
+
+def test_build_structured_position_explanation_preserves_candidate_order() -> None:
+    lines = [
+        CandidateLine("f2f4", "f4", 40, None, 20, [], []),
+        CandidateLine("g1f3", "Nf3", 35, None, 20, ["f4"], ["f2f4"]),
+        CandidateLine("e1g1", "O-O", 30, None, 20, [], []),
+    ]
+
+    explanation = build_structured_position_explanation(lines)
+
+    assert explanation.candidate_move_roles[0].startswith("f4")
+    assert explanation.candidate_move_roles[1].startswith("Nf3")
+    assert explanation.candidate_move_roles[2].startswith("O-O")
+
+
+def test_build_structured_position_explanation_distinguishes_direct_and_gradual_support() -> None:
+    lines = [
+        CandidateLine("f2f4", "f4", 40, None, 20, [], []),
+        CandidateLine("g1f3", "Nf3", 35, None, 20, ["f4"], ["f2f4"]),
+        CandidateLine("b1c3", "Nc3", 30, None, 20, ["f4"], ["f2f4"]),
+    ]
+
+    explanation = build_structured_position_explanation(lines)
+
+    assert "most direct route" in explanation.candidate_move_roles[0]
+    assert "more gradually" in explanation.candidate_move_roles[1]
+
+
+def test_build_structured_position_explanation_rejects_empty_input() -> None:
+    with pytest.raises(ValueError, match="at least one line"):
+        build_structured_position_explanation([])
+
+
+def test_build_structured_position_explanation_uses_provided_theme() -> None:
+    lines = [
+        CandidateLine("f2f4", "f4", 40, None, 20, [], []),
+        CandidateLine("g1f3", "Nf3", 35, None, 20, ["f4"], ["f2f4"]),
+    ]
+    theme = PositionTheme(
+        summary="Custom summary.",
+        recurring_ideas=[],
+        side_to_move_plan="Custom plan.",
+        opponent_counterplay="Custom warning.",
+        critical_decision=None,
+        best_move_role="Custom best move role.",
+        line_divergence_summary="Custom divergence.",
+    )
+
+    explanation = build_structured_position_explanation(lines, theme=theme)
+
+    assert explanation.position_summary == "Custom summary."
+    assert explanation.shared_plan == "Custom plan."
+    assert explanation.what_to_watch_out_for == "Custom warning."
+    assert explanation.why_the_best_move_fits == "Custom best move role."
+
+
+def test_build_structured_position_explanation_preserves_counterplay_fallback() -> None:
+    lines = [
+        CandidateLine("f2f4", "f4", 40, None, 20, [], []),
+        CandidateLine("g1f3", "Nf3", 35, None, 20, ["f4"], ["f2f4"]),
+        CandidateLine("b1c3", "Nc3", 30, None, 20, ["f4"], ["f2f4"]),
+    ]
+
+    explanation = build_structured_position_explanation(lines)
+
+    assert "No clear shared counterplay signal" in explanation.what_to_watch_out_for
 
 
 def _feature_labels(features: list[LineFeature], kind: str) -> list[str]:
