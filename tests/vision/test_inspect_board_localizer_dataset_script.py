@@ -42,8 +42,14 @@ def test_inspect_board_localizer_dataset_writes_panels_and_summary(
     assert len(written) == 1
     assert written[0].exists()
     assert written[0].with_suffix(".txt").exists()
-    summary_path = tmp_path / "out" / "train_summary.json"
-    assert summary_path.exists()
-    summary = json.loads(summary_path.read_text())
-    assert summary["count"] == 1
-    assert summary["normalized_area_mean"] > 0.0
+    raw_summary_path = tmp_path / "out" / "train_summary_raw.json"
+    sample_summary_path = tmp_path / "out" / "train_summary_sample_targets.json"
+    assert raw_summary_path.exists()
+    assert sample_summary_path.exists()
+    raw_summary = json.loads(raw_summary_path.read_text())
+    sample_summary = json.loads(sample_summary_path.read_text())
+    assert raw_summary["count"] == 1
+    assert raw_summary["normalized_area_mean"] > 0.0
+    assert sample_summary["count"] == 1
+    assert sample_summary["normalized_area_mean"] > 0.0
+    assert sample_summary["augment_applied"] is False

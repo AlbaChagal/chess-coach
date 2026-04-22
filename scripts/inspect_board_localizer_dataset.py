@@ -271,6 +271,31 @@ def _aggregate_split_stats(
     }
 
 
+def _aggregate_geometry_summaries(
+    summaries: list[dict[str, float | list[float]]],
+) -> dict[str, float | int | list[float]]:
+    """Compute aggregate geometry statistics from per-sample summaries."""
+    areas = [float(summary["normalized_area"]) for summary in summaries]
+    center_xs = [float(summary["normalized_center_x"]) for summary in summaries]
+    center_ys = [float(summary["normalized_center_y"]) for summary in summaries]
+    all_edge_lengths = [
+        [float(value) for value in summary["normalized_edge_lengths"]]
+        for summary in summaries
+    ]
+    edge_array = np.array(all_edge_lengths, dtype=np.float32)
+    return {
+        "count": len(summaries),
+        "normalized_area_mean": float(np.mean(areas)),
+        "normalized_area_min": float(np.min(areas)),
+        "normalized_area_max": float(np.max(areas)),
+        "normalized_center_x_mean": float(np.mean(center_xs)),
+        "normalized_center_y_mean": float(np.mean(center_ys)),
+        "normalized_edge_length_mean": edge_array.mean(axis=0).round(6).tolist(),
+        "normalized_edge_length_min": edge_array.min(axis=0).round(6).tolist(),
+        "normalized_edge_length_max": edge_array.max(axis=0).round(6).tolist(),
+    }
+
+
 def inspect_board_localizer_dataset(
     manifest_path: Path,
     output_dir: Path,
@@ -286,9 +311,11 @@ def inspect_board_localizer_dataset(
     selected_records = randomizer.sample(records, k=min(limit, len(records)))
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    summary = _aggregate_split_stats(records)
-    summary_path = output_dir / f"{split}_summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2) + "\n")
+    raw_summary = _aggregate_split_stats(records)
+    raw_summary_path = output_dir / f"{split}_summary_raw.json"
+    raw_summary_path.write_text(json.dumps(raw_summary, indent=2) + "\n")
+
+    sample_target_summaries: list[dict[str, float | list[float]]] = []
 
     written: list[Path] = []
     for index, record in enumerate(selected_records, start=1):
@@ -313,6 +340,7 @@ def inspect_board_localizer_dataset(
             target_corners,
             augmented=augment,
         )
+        sample_target_summaries.append(target_summary)
         output_path = output_dir / f"{index:03d}_{image_path.stem}.jpg"
         cv2.imwrite(str(output_path), panel)
         info_path = output_dir / f"{index:03d}_{image_path.stem}.txt"
@@ -325,6 +353,13 @@ def inspect_board_localizer_dataset(
         }
         info_path.write_text(json.dumps(info_payload, indent=2) + "\n")
         written.append(output_path)
+
+    sample_summary = _aggregate_geometry_summaries(sample_target_summaries)
+    sample_summary["augment_applied"] = augment
+    sample_summary["seed"] = seed
+    sample_summary["sample_limit"] = limit
+    sample_summary_path = output_dir / f"{split}_summary_sample_targets.json"
+    sample_summary_path.write_text(json.dumps(sample_summary, indent=2) + "\n")
 
     LOGGER.info(
         "Board-localizer dataset inspection written count=%s split=%s output=%s augment=%s seed=%s",

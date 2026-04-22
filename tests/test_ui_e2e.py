@@ -28,6 +28,7 @@ STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 STARTING_PLACEMENT = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
 AFTER_E4_FEN = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
 AFTER_E4_READY_FEN = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1"
+AFTER_E3_FEN = "rnbqkbnr/pppppppp/8/8/8/4P3/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
 PIECE_ROUTING_FEN = "4k3/8/8/3p4/2B1P3/8/4N3/4K3 w - - 0 1"
 
 
@@ -72,6 +73,42 @@ def _analysis_result(fen: str = STARTING_FEN) -> AnalysisResult:
             ],
             engine_depth=20,
             analysis_latency_ms=10.0,
+            analysis_status="success",
+        )
+    if fen == AFTER_E3_FEN:
+        return AnalysisResult(
+            fen=fen,
+            top_moves=[
+                MoveAnalysis(
+                    "d5",
+                    "d7d5",
+                    16,
+                    None,
+                    20,
+                    ["d4", "Nf6"],
+                    ["d2d4", "g8f6"],
+                ),
+                MoveAnalysis(
+                    "e5",
+                    "e7e5",
+                    12,
+                    None,
+                    20,
+                    ["d4", "Nc6"],
+                    ["d2d4", "b8c6"],
+                ),
+                MoveAnalysis(
+                    "c5",
+                    "c7c5",
+                    9,
+                    None,
+                    20,
+                    ["Nf3", "Nc6"],
+                    ["g1f3", "b8c6"],
+                ),
+            ],
+            engine_depth=20,
+            analysis_latency_ms=11.0,
             analysis_status="success",
         )
     return AnalysisResult(
@@ -726,7 +763,7 @@ def test_analysis_board_accepts_legal_move_and_reanalyzes_position(
     page.locator("[data-analysis-board] .square-e4").click()
 
     expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 1 of 4")
-    expect(page.locator("[data-line-list] .line-card").first).to_contain_text("1. c5")
+    expect(page.locator("[data-line-list] .line-card").first).to_contain_text("1. e4")
     assert _square_piece(page, "e2") == ""
     assert _square_piece(page, "e4") == "♙"
 
@@ -738,31 +775,75 @@ def test_analysis_board_accepts_legal_move_and_reanalyzes_position(
     assert _square_piece(page, "c5") == ""
 
     page.locator("[data-analysis-next-button]").click()
-    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 1 of 4")
-    assert _square_piece(page, "e2") == ""
-    assert _square_piece(page, "e4") == "♙"
-
-    page.locator("[data-analysis-next-button]").click()
-    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 2 of 4")
-    assert _square_piece(page, "c7") == ""
-    assert _square_piece(page, "c5") == "♟"
-
-    page.locator("[data-analysis-prev-button]").click()
     expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 1 of 4")
     assert _square_piece(page, "e2") == ""
     assert _square_piece(page, "e4") == "♙"
 
     page.locator("[data-analysis-reset-button]").click()
+    expect(page.locator("[data-line-list] .line-card").first).to_contain_text("1. e4")
     expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 0 of 4")
     assert _square_piece(page, "e2") == "♙"
     assert _square_piece(page, "e4") == ""
-    assert _square_piece(page, "c7") == "♟"
-    assert _square_piece(page, "c5") == ""
+
+
+def test_analysis_board_reanalyzes_nonsuggested_move_and_can_restore_original_position(
+    page: Page,
+    live_server_url: str,
+    board_image_path: Path,
+) -> None:
+    _upload_and_detect_board(page, live_server_url, board_image_path)
+
+    _click_square(page, "[data-image-stage]", 0.5625, 0.9375)
+    page.locator("[data-orientation-continue-button]").click()
+    page.locator('[data-side-option="w"]').click()
+    page.locator("[data-complete-button]").click()
+    page.locator("[data-continue-to-analysis-button]").click()
+
+    expect(page.locator("[data-line-list] .line-card").first).to_contain_text("1. e4")
+    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 0 of 4")
+
+    page.locator("[data-analysis-board] .square-e2").click()
+    expect(page.locator("[data-analysis-board] .square-e3")).to_have_class(
+        re.compile(r".*\bis-legal-target\b.*")
+    )
+    page.locator("[data-analysis-board] .square-e3").click()
+
+    expect(page.locator("[data-line-list] .line-card").first).to_contain_text("1. d5")
+    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 1 of 4")
+    assert _square_piece(page, "e2") == ""
+    assert _square_piece(page, "e3") == "♙"
+
+    page.locator("[data-analysis-prev-button]").click()
+    expect(page.locator("[data-line-list] .line-card").first).to_contain_text("1. e4")
+    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 0 of 4")
+    assert _square_piece(page, "e2") == "♙"
+    assert _square_piece(page, "e3") == ""
 
     page.locator("[data-analysis-next-button]").click()
+    expect(page.locator("[data-line-list] .line-card").first).to_contain_text("1. e4")
     expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 1 of 4")
     assert _square_piece(page, "e2") == ""
     assert _square_piece(page, "e4") == "♙"
+
+    page.locator("[data-analysis-reset-button]").click()
+    expect(page.locator("[data-line-list] .line-card").first).to_contain_text("1. e4")
+    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 0 of 4")
+    assert _square_piece(page, "e2") == "♙"
+    assert _square_piece(page, "e4") == ""
+
+    page.locator("[data-analysis-board] .square-e2").click()
+    page.locator("[data-analysis-board] .square-e3").click()
+
+    expect(page.locator("[data-line-list] .line-card").first).to_contain_text("1. d5")
+    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 1 of 4")
+    assert _square_piece(page, "e2") == ""
+    assert _square_piece(page, "e3") == "♙"
+
+    page.locator("[data-analysis-reset-button]").click()
+    expect(page.locator("[data-line-list] .line-card").first).to_contain_text("1. e4")
+    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 0 of 4")
+    assert _square_piece(page, "e2") == "♙"
+    assert _square_piece(page, "e3") == ""
 
 
 def test_capture_targets_use_centered_translucent_overlays(

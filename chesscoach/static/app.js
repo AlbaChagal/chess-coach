@@ -202,6 +202,7 @@
         result: null,
         baseFen: "",
         sessionMoves: [],
+        history: [],
         activeLineIndex: 0,
         stepIndex: 0,
         flipped: false,
@@ -317,6 +318,19 @@
 
   function maxStep(stepA, stepB) {
     return STEP_ORDER.indexOf(stepA) >= STEP_ORDER.indexOf(stepB) ? stepA : stepB;
+  }
+
+  function cloneCompletedPosition(position) {
+    if (!position) {
+      return null;
+    }
+    return {
+      fen: position.fen,
+      fen_placement: position.fen_placement,
+      side_to_move: position.side_to_move,
+      castling_rights: position.castling_rights,
+      en_passant: position.en_passant,
+    };
   }
 
   function isStepReachable(state, step) {
@@ -1477,7 +1491,8 @@
 
     async function analyzeCurrentPosition(
       sessionMoves = state.analysis.sessionMoves,
-      baseFen = null
+      baseFen = null,
+      history = state.analysis.history
     ) {
       if (!state.completedPosition) {
         return;
@@ -1520,6 +1535,7 @@
         result: normalizeAnalysisResult(payload.analysis),
         baseFen: nextBaseFen,
         sessionMoves: sessionMoves.slice(),
+        history: history.slice(),
         activeLineIndex: 0,
         stepIndex: sessionMoves.length,
         flipped: state.analysis.flipped,
@@ -1925,6 +1941,7 @@
         result: normalizeAnalysisResult(snapshot.analysis),
         baseFen: snapshot.position?.fen || snapshot.analysis?.fen || "",
         sessionMoves: [],
+        history: [],
         activeLineIndex: 0,
         stepIndex: 0,
         flipped: false,
@@ -2242,10 +2259,28 @@
     }
 
     async function applyInteractiveMove(fen, moveUci) {
+      const suggestedMoveIndex = matchingSuggestedMoveIndex(moveUci);
+      if (suggestedMoveIndex >= 0) {
+        state.analysis.activeLineIndex = suggestedMoveIndex;
+        state.analysis.stepIndex = currentAnalysisRootStep(state) + 1;
+        clearAnalysisInteraction();
+        render();
+        return;
+      }
+      const expectedPlaybackMove = playbackMoves(state)[state.analysis.stepIndex];
+      if (expectedPlaybackMove && expectedPlaybackMove === moveUci) {
+        state.analysis.stepIndex += 1;
+        clearAnalysisInteraction();
+        render();
+        return;
+      }
       state.analysis.submittingMove = true;
       clearError(analysisError);
       render();
       try {
+        const nextHistory = (state.analysis.history || []).concat(
+          createAnalysisSnapshot()
+        );
         const nextSessionMoves = playbackMoves(state)
           .slice(0, state.analysis.stepIndex)
           .concat(moveUci);
@@ -2274,7 +2309,11 @@
           ? payload.legal_moves
           : [];
         clearAnalysisInteraction();
-        await analyzeCurrentPosition(nextSessionMoves, state.analysis.baseFen);
+        await analyzeCurrentPosition(
+          nextSessionMoves,
+          state.analysis.baseFen,
+          nextHistory
+        );
       } catch (_error) {
         showError(analysisError, "Unable to apply that move right now.");
         state.analysis.submittingMove = false;
@@ -2370,8 +2409,87 @@
       return analysisLineMoves(state);
     }
 
+    function currentAnalysisRootStep(state) {
+      return (state.analysis.sessionMoves || []).length;
+    }
+
     function currentPlaybackFen(state) {
       return playbackState(state).fen;
+    }
+
+    function createAnalysisSnapshot() {
+      return {
+        status: state.analysis.status,
+        result: state.analysis.result,
+        baseFen: state.analysis.baseFen,
+        sessionMoves: (state.analysis.sessionMoves || []).slice(),
+        history: (state.analysis.history || []).slice(),
+        activeLineIndex: state.analysis.activeLineIndex,
+        stepIndex: state.analysis.stepIndex,
+        position: cloneCompletedPosition(state.completedPosition),
+      };
+    }
+
+    function applyAnalysisSnapshot(snapshot, stepIndex) {
+      const preservedFlip = state.analysis.flipped;
+      state.completedPosition = cloneCompletedPosition(snapshot.position);
+      state.analysis = {
+        status: snapshot.status || "success",
+        result: snapshot.result,
+        baseFen: snapshot.baseFen,
+        sessionMoves: (snapshot.sessionMoves || []).slice(),
+        history: (snapshot.history || []).slice(),
+        activeLineIndex: snapshot.activeLineIndex || 0,
+        stepIndex,
+        flipped: preservedFlip,
+        interactiveSelectedSquare: "",
+        interactiveLegalMoves: [],
+        interactiveLegalMovesFen: "",
+        interactiveTargetSquares: [],
+        submittingMove: false,
+      };
+      state.explanation = createExplanationState();
+    }
+
+    function snapshotForStep(targetStep) {
+      let snapshot = createAnalysisSnapshot();
+      while (
+        targetStep < (snapshot.sessionMoves || []).length &&
+        snapshot.history &&
+        snapshot.history.length > 0
+      ) {
+        snapshot = snapshot.history[snapshot.history.length - 1];
+      }
+      return snapshot;
+    }
+
+    function setAnalysisStep(targetStep) {
+      const nextStep = Math.max(0, targetStep);
+      const snapshot = snapshotForStep(nextStep);
+      const snapshotRootStep = (snapshot.sessionMoves || []).length;
+      if (
+        snapshot.baseFen !== state.analysis.baseFen ||
+        snapshotRootStep !== currentAnalysisRootStep(state)
+      ) {
+        applyAnalysisSnapshot(snapshot, nextStep);
+        render();
+        return;
+      }
+      state.analysis.stepIndex = nextStep;
+      clearAnalysisInteraction();
+      render();
+    }
+
+    function matchingSuggestedMoveIndex(moveUci) {
+      if (
+        state.analysis.stepIndex !== currentAnalysisRootStep(state) ||
+        !Array.isArray(state.analysis.result?.top_moves)
+      ) {
+        return -1;
+      }
+      return state.analysis.result.top_moves.findIndex(
+        (move) => move?.move_uci === moveUci
+      );
     }
 
     function currentArrowMove(state) {
@@ -2443,20 +2561,14 @@
     continueToAnalysisButton.addEventListener("click", enterAnalysisMode);
     analysisFlipButton?.addEventListener("click", toggleBoardPerspective);
     analysisPrevButton.addEventListener("click", () => {
-      state.analysis.stepIndex = Math.max(0, state.analysis.stepIndex - 1);
-      clearAnalysisInteraction();
-      render();
+      setAnalysisStep(state.analysis.stepIndex - 1);
     });
     analysisNextButton.addEventListener("click", () => {
       const maxIndex = playbackMoves(state).length;
-      state.analysis.stepIndex = Math.min(maxIndex, state.analysis.stepIndex + 1);
-      clearAnalysisInteraction();
-      render();
+      setAnalysisStep(Math.min(maxIndex, state.analysis.stepIndex + 1));
     });
     analysisResetButton.addEventListener("click", () => {
-      state.analysis.stepIndex = 0;
-      clearAnalysisInteraction();
-      render();
+      setAnalysisStep(0);
     });
     analysisRetryButton.addEventListener("click", enterAnalysisMode);
     saveButton.addEventListener("click", saveCurrentSnapshot);

@@ -132,12 +132,22 @@ def test_interactive_analysis_board_uses_backend_legal_moves_and_move_applicatio
     assert "interactiveLegalMovesFen: \"\"," in script
     assert "interactiveTargetSquares: []," in script
     assert "sessionMoves: []," in script
+    assert "history: []," in script
     assert "function ensureInteractiveLegalMoves(fen)" in script
     assert "function handleAnalysisBoardClick(event)" in script
     assert "function applyInteractiveMove(fen, moveUci)" in script
+    assert "function createAnalysisSnapshot()" in script
+    assert "function applyAnalysisSnapshot(snapshot, stepIndex)" in script
+    assert "function snapshotForStep(targetStep)" in script
+    assert "function setAnalysisStep(targetStep)" in script
+    assert "function matchingSuggestedMoveIndex(moveUci)" in script
     assert "function playbackMoves(state)" in script
     assert "clearAnalysisInteraction();" in script
     assert "state.analysis.interactiveTargetSquares = [" in script
+    assert "const suggestedMoveIndex = matchingSuggestedMoveIndex(moveUci);" in script
+    assert "state.analysis.activeLineIndex = suggestedMoveIndex;" in script
+    assert "createAnalysisSnapshot()" in script
+    assert "await analyzeCurrentPosition(" in script
     assert 'body: JSON.stringify({ fen })' in script
     assert 'body: JSON.stringify({' in script
     assert 'move_uci: moveUci,' in script
