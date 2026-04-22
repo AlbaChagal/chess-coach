@@ -29,6 +29,7 @@ from chesscoach.explanation.position_synthesizer import (
 )
 from chesscoach.explanation.prompt import (
     build_best_move_prompt,
+    build_position_prompt,
     build_played_move_prompt,
 )
 from chesscoach.explanation.providers import LLMProvider
@@ -133,6 +134,25 @@ class Explainer:
             raise ExplanationError("No explanation provider configured.")
         system, user = build_best_move_prompt(explained, structured)
         LOGGER.debug("Calling LLM provider for explanation")
+        return self._provider.complete(system, user)
+
+    def narrate_position_explanation(
+        self,
+        fen_before: str,
+        structured: StructuredPositionExplanation | None = None,
+    ) -> str:
+        """Turn a structured position explanation into final narration."""
+        if self._provider is None:
+            raise ExplanationError("No explanation provider configured.")
+        if structured is None:
+            structured = self.build_structured_position_explanation(fen_before)
+        candidate_lines = normalize_move_analyses(self._get_engine_moves_for_fen(fen_before))
+        system, user = build_position_prompt(
+            structured,
+            fen_before=fen_before,
+            candidate_lines=candidate_lines,
+        )
+        LOGGER.debug("Calling LLM provider for position explanation")
         return self._provider.complete(system, user)
 
     def build_played_move_result(
@@ -252,6 +272,11 @@ class Explainer:
         explained = self.analyze_move(fen_before, move_uci)
         structured = self.build_structured_explanation(explained)
         return self.narrate_explanation(explained, structured)
+
+    def explain_position(self, fen_before: str) -> str:
+        """Full pipeline for position narration without a played move."""
+        structured = self.build_structured_position_explanation(fen_before)
+        return self.narrate_position_explanation(fen_before, structured)
 
     def explain(self, fen: str, moves: list[MoveAnalysis]) -> str:
         """Explain the top engine move for a position (legacy interface).

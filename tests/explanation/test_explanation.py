@@ -228,6 +228,42 @@ def test_narrate_explanation_uses_structured_input() -> None:
     provider.complete.assert_called_once()
 
 
+def test_narrate_position_explanation_uses_provider_once() -> None:
+    provider = MagicMock()
+    provider.complete.return_value = "The position is about preparing f4."
+    explainer = _make_explainer()
+    explainer._provider = provider
+    structured = explainer.build_structured_position_explanation(STARTING_FEN)
+
+    text = explainer.narrate_position_explanation(STARTING_FEN, structured)
+
+    assert text == "The position is about preparing f4."
+    provider.complete.assert_called_once()
+
+
+def test_narrate_position_explanation_provider_receives_non_empty_prompts() -> None:
+    provider = MagicMock()
+    provider.complete.return_value = "ok"
+    explainer = _make_explainer()
+    explainer._provider = provider
+
+    explainer.narrate_position_explanation(STARTING_FEN)
+
+    call_args = provider.complete.call_args
+    system, user = call_args.args
+    assert len(system) > 0
+    assert len(user) > 0
+
+
+def test_explain_position_returns_string() -> None:
+    explainer = _make_explainer("Position text")
+
+    result = explainer.explain_position(STARTING_FEN)
+
+    assert isinstance(result, str)
+    assert result == "Position text"
+
+
 def test_analyze_position_theme_returns_position_theme() -> None:
     from chesscoach.explanation.models import PositionTheme
 
