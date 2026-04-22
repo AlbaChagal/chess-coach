@@ -200,6 +200,8 @@
       analysis: {
         status: "idle",
         result: null,
+        baseFen: "",
+        sessionMoves: [],
         activeLineIndex: 0,
         stepIndex: 0,
         flipped: false,
@@ -285,6 +287,7 @@
         analysis_status: "success",
       };
     }
+
     const topMoves = Array.isArray(result.top_moves) ? result.top_moves : [];
     return {
       ...result,
@@ -301,6 +304,15 @@
         score_display: move?.score_display || "?",
       })),
     };
+  }
+
+  function resetAnalysisForCommittedPosition() {
+    const preservedFlip = state.analysis.flipped;
+    state.analysis = {
+      ...createAnalyzeState().analysis,
+      flipped: preservedFlip,
+    };
+    state.explanation = createExplanationState();
   }
 
   function maxStep(stepA, stepB) {
@@ -491,7 +503,6 @@
     const cornerHandles = Array.from(root.querySelectorAll("[data-corner-handle]"));
     const selectionNote = root.querySelector("[data-selection-note]");
     const selectionBadge = root.querySelector("[data-selection-badge]");
-    const selectionBadgeSquare = root.querySelector("[data-selection-badge-square]");
     const sideNote = root.querySelector("[data-side-note]");
     const detectButton = root.querySelector("[data-detect-button]");
     const resetImageButton = root.querySelector("[data-reset-image-button]");
@@ -509,7 +520,6 @@
       root.querySelectorAll("[data-ready-edit-toggle-button]")
     );
     const readyEditor = root.querySelector("[data-ready-editor]");
-    const readyBoardElement = root.querySelector("[data-ready-board]");
     const readyEditorNote = root.querySelector("[data-ready-editor-note]");
     const readyError = root.querySelector("[data-ready-error]");
     const readyFeedback = root.querySelector("[data-ready-feedback]");
@@ -564,6 +574,19 @@
     const analysisSourceCard = root.querySelector("[data-analysis-source-card]");
     const analysisSourceImage = root.querySelector("[data-analysis-source-image]");
 
+    function boardPerspectiveOrientation() {
+      return state.analysis.flipped ? "black" : "white";
+    }
+
+    function boardPerspectiveButtonLabel() {
+      return "Flip Board";
+    }
+
+    function toggleBoardPerspective() {
+      state.analysis.flipped = !state.analysis.flipped;
+      render();
+    }
+
     function render() {
       stepSections.forEach((section) => {
         section.hidden = section.dataset.step !== state.step;
@@ -604,10 +627,9 @@
       });
 
       selectionNote.textContent = state.selectedSquare
-        ? `Selected square: ${state.selectedSquare}.`
-        : "No square selected yet.";
+        ? "Selection saved. Continue if this matches where the white king started."
+        : "Tap the square where the white king started.";
       setElementVisibility(selectionBadge, !!state.selectedSquare);
-      selectionBadgeSquare.textContent = state.selectedSquare || "-";
       sideNote.textContent = state.sideToMove
         ? `${state.sideToMove === "w" ? "White" : "Black"} to move selected.`
         : "No side selected yet.";
@@ -665,7 +687,7 @@
           "points",
           polygonPoints.map((point) => point.join(",")).join(" ")
         );
-        const markerText = state.selectedSquare.toUpperCase();
+        const markerText = "Start";
         const markerX = Math.max(
           18,
           Math.min(
@@ -697,6 +719,13 @@
         ensureReadyEditorState();
       } else {
         continueToAnalysisButton.disabled = true;
+      }
+      if (analysisFlipButton) {
+        setElementVisibility(
+          analysisFlipButton,
+          state.step === "ready" || state.step === "analysis"
+        );
+        analysisFlipButton.textContent = boardPerspectiveButtonLabel();
       }
 
       renderReadyEditorState();
@@ -815,21 +844,9 @@
         }
       }
 
-      if (!state.readyEditor.isOpen || !readyBoardElement) {
-        return;
-      }
-
-      const boardReadyNow = rebuildBoard(
-        readyBoardElement,
-        `${state.readyEditor.draftPlacement} w - - 0 1`,
-        "white",
-        true
-      );
-      if (!boardReadyNow) {
+      if (state.readyEditor.isOpen && !state.completedPosition) {
         showError(readyError, "Unable to render the correction board right now.");
-        return;
       }
-      highlightReadyBoardSelection();
     }
 
     function ensureReadyEditorState() {
@@ -884,10 +901,10 @@
     }
 
     function highlightReadyBoardSelection() {
-      if (!readyBoardElement) {
+      if (!analysisBoardElement) {
         return;
       }
-      readyBoardElement
+      analysisBoardElement
         .querySelectorAll(".analysis-square.is-selected")
         .forEach((square) => {
           square.classList.remove("is-selected");
@@ -895,7 +912,7 @@
       if (!state.readyEditor.selectedSquare) {
         return;
       }
-      readyBoardElement
+      analysisBoardElement
         .querySelector(`.square-${state.readyEditor.selectedSquare}`)
         ?.classList.add("is-selected");
     }
@@ -1458,10 +1475,14 @@
       }
     }
 
-    async function analyzeCurrentPosition() {
+    async function analyzeCurrentPosition(
+      sessionMoves = state.analysis.sessionMoves,
+      baseFen = null
+    ) {
       if (!state.completedPosition) {
         return;
       }
+      const nextBaseFen = baseFen || state.completedPosition.fen;
       state.step = "analysis";
       state.savedSnapshotId = null;
       state.analysis.status = "loading";
@@ -1497,8 +1518,10 @@
       state.analysis = {
         status: "success",
         result: normalizeAnalysisResult(payload.analysis),
+        baseFen: nextBaseFen,
+        sessionMoves: sessionMoves.slice(),
         activeLineIndex: 0,
-        stepIndex: 0,
+        stepIndex: sessionMoves.length,
         flipped: state.analysis.flipped,
         interactiveSelectedSquare: "",
         interactiveLegalMoves: [],
@@ -1527,7 +1550,14 @@
         return;
       }
       if (step === "analysis") {
-        if (state.analysis.status === "success" || state.analysis.status === "loading") {
+        const analysisMatchesCommittedFen =
+          state.analysis.baseFen !== "" &&
+          state.analysis.baseFen === state.completedPosition?.fen;
+        if (
+          analysisMatchesCommittedFen &&
+          (state.analysis.status === "success" ||
+            state.analysis.status === "loading")
+        ) {
           state.step = "analysis";
           render();
           return;
@@ -1597,7 +1627,7 @@
     }
 
     function handleReadyBoardClick(event) {
-      if (!state.readyEditor.isOpen || !readyBoardElement) {
+      if (!state.readyEditor.isOpen || state.step !== "ready") {
         return;
       }
       const squareElement = event.target.closest(".analysis-square");
@@ -1700,6 +1730,8 @@
         state.readyEditor.activeTool = null;
         state.readyEditor.isOpen = false;
         state.readyEditor.feedback = "Corrected position saved.";
+        state.savedSnapshotId = null;
+        resetAnalysisForCommittedPosition();
         clearError(analysisError);
       } catch (_error) {
         state.readyEditor.error =
@@ -1891,6 +1923,8 @@
       state.analysis = {
         status: "success",
         result: normalizeAnalysisResult(snapshot.analysis),
+        baseFen: snapshot.position?.fen || snapshot.analysis?.fen || "",
+        sessionMoves: [],
         activeLineIndex: 0,
         stepIndex: 0,
         flipped: false,
@@ -1959,7 +1993,7 @@
           .querySelector("[data-line-select-button]")
           .addEventListener("click", () => {
             state.analysis.activeLineIndex = index;
-            state.analysis.stepIndex = 0;
+            state.analysis.stepIndex = state.analysis.sessionMoves.length;
             clearAnalysisInteraction();
             render();
           });
@@ -1981,7 +2015,7 @@
         return;
       }
       state.analysis.activeLineIndex = index;
-      state.analysis.stepIndex = 0;
+      state.analysis.stepIndex = state.analysis.sessionMoves.length;
       if (index === 0) {
         requestExplanation("best_move", null, index);
         return;
@@ -1994,9 +2028,20 @@
         return;
       }
       const showNotation = loadSettings().showCoordinates;
-      const orientation = state.analysis.flipped ? "black" : "white";
+      const orientation = boardPerspectiveOrientation();
       let previewFen = state.completedPosition?.fen || STARTING_POSITION_FEN;
-      if (state.analysis.status === "success") {
+      if (
+        state.step === "ready" &&
+        state.readyEditor.isOpen &&
+        state.readyEditor.draftPlacement &&
+        state.completedPosition
+      ) {
+        previewFen =
+          `${state.readyEditor.draftPlacement} ` +
+          `${state.completedPosition.side_to_move} ` +
+          `${state.completedPosition.castling_rights} ` +
+          `${state.completedPosition.en_passant} 0 1`;
+      } else if (state.step === "analysis" && state.analysis.status === "success") {
         try {
           previewFen = currentPlaybackFen(state) || previewFen;
         } catch (error) {
@@ -2014,6 +2059,13 @@
           analysisError,
           "Board preview unavailable right now. Lines and scores are still available."
         );
+        setElementVisibility(analysisArrow, false);
+        setElementVisibility(analysisArrowHead, false);
+        setElementVisibility(analysisArrowLayer, false);
+        return;
+      }
+      if (state.step === "ready" && state.readyEditor.isOpen) {
+        highlightReadyBoardSelection();
         setElementVisibility(analysisArrow, false);
         setElementVisibility(analysisArrowHead, false);
         setElementVisibility(analysisArrowLayer, false);
@@ -2037,7 +2089,7 @@
 
     function renderPlaybackControls() {
       const hasAnalysis = state.analysis.status === "success" && !!state.analysis.result;
-      const moves = hasAnalysis ? currentLineMoves(state) : [];
+      const moves = hasAnalysis ? playbackMoves(state) : [];
       analysisPrevButton.disabled = !hasAnalysis || state.analysis.stepIndex === 0;
       analysisNextButton.disabled =
         !hasAnalysis || state.analysis.stepIndex >= moves.length;
@@ -2052,9 +2104,15 @@
         return;
       }
       analysisBoardElement
-        .querySelectorAll(".analysis-square.is-selected, .analysis-square.is-legal-target")
+        .querySelectorAll(
+          ".analysis-square.is-selected, .analysis-square.is-legal-target, .analysis-square.is-legal-capture"
+        )
         .forEach((square) => {
-          square.classList.remove("is-selected", "is-legal-target");
+          square.classList.remove(
+            "is-selected",
+            "is-legal-target",
+            "is-legal-capture"
+          );
         });
       if (state.analysis.interactiveSelectedSquare) {
         analysisBoardElement
@@ -2062,9 +2120,15 @@
           ?.classList.add("is-selected");
       }
       state.analysis.interactiveTargetSquares.forEach((squareName) => {
-        analysisBoardElement
-          .querySelector(`.square-${squareName}`)
-          ?.classList.add("is-legal-target");
+        const square = analysisBoardElement.querySelector(`.square-${squareName}`);
+        if (!square) {
+          return;
+        }
+        square.classList.add("is-legal-target");
+        const pieceGlyph = square.querySelector(".piece-glyph");
+        if (pieceGlyph && pieceGlyph.textContent && pieceGlyph.textContent.trim()) {
+          square.classList.add("is-legal-capture");
+        }
       });
     }
 
@@ -2182,6 +2246,9 @@
       clearError(analysisError);
       render();
       try {
+        const nextSessionMoves = playbackMoves(state)
+          .slice(0, state.analysis.stepIndex)
+          .concat(moveUci);
         const response = await fetch(playMoveEndpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2207,7 +2274,7 @@
           ? payload.legal_moves
           : [];
         clearAnalysisInteraction();
-        await analyzeCurrentPosition();
+        await analyzeCurrentPosition(nextSessionMoves, state.analysis.baseFen);
       } catch (_error) {
         showError(analysisError, "Unable to apply that move right now.");
         state.analysis.submittingMove = false;
@@ -2312,7 +2379,7 @@
         return null;
       }
       const boardState = playbackState(state);
-      const moves = currentLineMoves(state);
+      const moves = playbackMoves(state);
       if (state.analysis.stepIndex >= moves.length) {
         return null;
       }
@@ -2364,7 +2431,6 @@
         openReadyEditor();
       });
     });
-    readyBoardElement?.addEventListener("click", handleReadyBoardClick);
     readyPieceButtons.forEach((button) => {
       button.addEventListener("click", () => {
         handleReadyPieceButtonClick(button.dataset.readyPieceButton);
@@ -2375,17 +2441,14 @@
     readyCancelButton?.addEventListener("click", cancelReadyEditor);
     readyDoneButton?.addEventListener("click", applyReadyEditor);
     continueToAnalysisButton.addEventListener("click", enterAnalysisMode);
-    analysisFlipButton.addEventListener("click", () => {
-      state.analysis.flipped = !state.analysis.flipped;
-      render();
-    });
+    analysisFlipButton?.addEventListener("click", toggleBoardPerspective);
     analysisPrevButton.addEventListener("click", () => {
       state.analysis.stepIndex = Math.max(0, state.analysis.stepIndex - 1);
       clearAnalysisInteraction();
       render();
     });
     analysisNextButton.addEventListener("click", () => {
-      const maxIndex = currentLineMoves(state).length;
+      const maxIndex = playbackMoves(state).length;
       state.analysis.stepIndex = Math.min(maxIndex, state.analysis.stepIndex + 1);
       clearAnalysisInteraction();
       render();
@@ -2399,6 +2462,10 @@
     saveButton.addEventListener("click", saveCurrentSnapshot);
     deleteSavedButton.addEventListener("click", deleteCurrentSnapshot);
     analysisBoardElement?.addEventListener("click", (event) => {
+      if (state.step === "ready" && state.readyEditor.isOpen) {
+        handleReadyBoardClick(event);
+        return;
+      }
       handleAnalysisBoardClick(event).catch((error) => {
         console.error("interactive board click failed", error, state.analysis);
         showError(
@@ -2590,12 +2657,17 @@
     return [move.move_uci].concat(move.continuation_uci || []);
   }
 
+  function playbackMoves(state) {
+    return (state.analysis.sessionMoves || []).concat(analysisLineMoves(state));
+  }
+
   function playbackState(state) {
-    if (!state.completedPosition) {
+    const baseFen = state.analysis.baseFen || state.completedPosition?.fen || "";
+    if (!baseFen) {
       return boardStateFromFen("8/8/8/8/8/8/8/8 w - - 0 1");
     }
-    let boardState = boardStateFromFen(state.completedPosition.fen);
-    const moves = analysisLineMoves(state);
+    let boardState = boardStateFromFen(baseFen);
+    const moves = playbackMoves(state);
     for (let index = 0; index < state.analysis.stepIndex; index += 1) {
       const move = moves[index];
       if (!move) {

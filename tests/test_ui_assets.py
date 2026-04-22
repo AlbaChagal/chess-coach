@@ -30,6 +30,11 @@ def test_orientation_click_maps_from_rendered_image_bounds() -> None:
     assert "function setElementVisibility(element, visible)" in script
     assert 'element.removeAttribute("hidden");' in script
     assert 'setElementVisibility(selectionBadge, !!state.selectedSquare);' in script
+    assert (
+        "Selection saved. Continue if this matches where the white king started."
+        in script
+    )
+    assert "Selected square:" not in script
     assert 'selectedMarkerText.textContent = markerText;' in script
     assert '.selection-badge {' in styles
 
@@ -59,7 +64,12 @@ def test_analysis_board_renderer_is_hardened_against_partial_dom_state() -> None
         script
     )
     assert "function analysisLineMoves(state)" in script
-    assert "const moves = analysisLineMoves(state);" in script
+    assert "function playbackMoves(state)" in script
+    assert "const moves = playbackMoves(state);" in script
+    assert 'baseFen: "",' in script
+    assert "const baseFen = state.analysis.baseFen || state.completedPosition?.fen || \"\";" in (
+        script
+    )
     assert 'data-analysis-source-card' in template
     assert 'data-analysis-source-image' in template
     assert "function rebuildBoard(boardElement, fen, orientation, showNotation)" in script
@@ -121,16 +131,30 @@ def test_interactive_analysis_board_uses_backend_legal_moves_and_move_applicatio
     assert "interactiveLegalMoves: []," in script
     assert "interactiveLegalMovesFen: \"\"," in script
     assert "interactiveTargetSquares: []," in script
+    assert "sessionMoves: []," in script
     assert "function ensureInteractiveLegalMoves(fen)" in script
     assert "function handleAnalysisBoardClick(event)" in script
     assert "function applyInteractiveMove(fen, moveUci)" in script
+    assert "function playbackMoves(state)" in script
     assert "clearAnalysisInteraction();" in script
     assert "state.analysis.interactiveTargetSquares = [" in script
     assert 'body: JSON.stringify({ fen })' in script
     assert 'body: JSON.stringify({' in script
     assert 'move_uci: moveUci,' in script
+    assert ".slice(0, state.analysis.stepIndex)" in script
+    assert ".concat(moveUci);" in script
+    assert "stepIndex: sessionMoves.length," in script
     assert ".analysis-square.is-selected {" in styles
     assert ".analysis-square.is-legal-target::after {" in styles
+    assert ".analysis-square.is-legal-capture::after {" in styles
+    assert 'square.classList.add("is-legal-capture");' in script
+    assert "top: 50%;" in styles
+    assert "left: 50%;" in styles
+    assert "transform: translate(-50%, -50%);" in styles
+    assert "background: rgba(89, 93, 102, 0.34);" in styles
+    assert "background: rgba(89, 93, 102, 0.18);" in styles
+    assert "z-index: 2;" in styles
+    assert "z-index: 3;" in styles
 
 
 def test_starting_board_preview_is_rendered_from_known_fen() -> None:
@@ -146,6 +170,8 @@ def test_starting_board_preview_is_rendered_from_known_fen() -> None:
     )
     assert "state.completedPosition?.fen ||" in script
     assert "STARTING_POSITION_FEN;" in script
+    assert "const nextBaseFen = baseFen || state.completedPosition.fen;" in script
+    assert "baseFen: nextBaseFen," in script
     assert "renderPreviewBoard();" in script
     assert "renderAnalysisState();" in script
 
@@ -189,14 +215,23 @@ def test_ready_stage_editor_assets_and_validation_are_wired() -> None:
     template = (PROJECT_ROOT / "chesscoach/templates/app_shell.html").read_text()
 
     assert 'data-ready-edit-toggle-button' in template
+    assert 'data-ready-flip-button' not in template
+    assert (
+        template.index('data-analysis-board')
+        < template.index('data-ready-editor')
+        < template.index('data-ready-edit-toggle-button')
+    )
     assert 'data-ready-editor' in template
-    assert 'data-ready-board' in template
     assert 'data-ready-piece-button="clear"' in template
     assert 'data-ready-cancel-tool-button' in template
     assert 'data-ready-reset-button' in template
     assert 'data-ready-cancel-button' in template
     assert 'data-ready-apply-button' in template
     assert "function createReadyEditorState()" in script
+    assert "function boardPerspectiveOrientation()" in script
+    assert "function boardPerspectiveButtonLabel()" in script
+    assert "function toggleBoardPerspective()" in script
+    assert 'state.step === "ready" || state.step === "analysis"' in script
     assert "function validateReadyPlacement(placementText)" in script
     assert ('return "The board must contain exactly one white king.";') in script
     assert ('return "The board must contain exactly one black king.";') in script
@@ -205,9 +240,19 @@ def test_ready_stage_editor_assets_and_validation_are_wired() -> None:
     ) in script
     assert "function handleReadyBoardClick(event)" in script
     assert "function applyReadyEditor()" in script
+    assert "function resetAnalysisForCommittedPosition()" in script
+    assert "const analysisMatchesCommittedFen =" in script
+    assert "state.analysis.baseFen === state.completedPosition?.fen;" in script
+    assert 'analysisFlipButton?.addEventListener("click", toggleBoardPerspective);' in (
+        script
+    )
     assert 'state.readyEditor.draftPlacement = state.readyEditor.detectedPlacement;' in script
     assert 'state.readyEditor.draftPlacement = payload.position.fen_placement;' in script
+    assert "resetAnalysisForCommittedPosition();" in script
+    assert template.index('data-ready-editor') < template.index("analysis-playback")
     assert ".ready-editor {" in styles
+    assert ".ready-editor-toolbar {" in styles
+    assert ".ready-editor-actions {" in styles
     assert ".piece-palette {" in styles
     assert ".piece-chip {" in styles
-    assert ".ready-board .analysis-square.is-selected {" in styles
+    assert ".analysis-square.is-selected {" in styles

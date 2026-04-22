@@ -56,6 +56,9 @@
               position as you move through the funnel.
             </p>
           </div>
+          <button class="secondary-link" data-analysis-flip-button type="button">
+            Flip Board
+          </button>
         </div>
         <div class="analysis-board-shell" data-analysis-board-shell>
           <div class="analysis-board" data-analysis-board></div>
@@ -64,6 +67,103 @@
             <path data-analysis-arrow-head hidden></path>
           </svg>
         </div>
+        <section class="ready-editor" data-ready-editor hidden>
+          <div class="ready-editor-header">
+            <div>
+              <h3>Correct This Position</h3>
+              <p class="screen-subheading">
+                Keep the correction tools next to the board so you can patch the
+                detected position without jumping around the page.
+              </p>
+            </div>
+            <div
+              class="selection-badge ready-editor-square-badge"
+              data-ready-selected-badge
+              hidden
+            >
+              Editing square: <strong data-ready-selected-square>-</strong>
+            </div>
+          </div>
+
+          <div class="ready-editor-layout">
+            <div class="ready-editor-copy">
+              <p class="selection-note" data-ready-editor-note>
+                Tap a square on the board to start correcting the detected
+                position.
+              </p>
+              <p class="selection-note">
+                TODO: castling rights are still inferred automatically, and en
+                passant remains disabled for now.
+              </p>
+            </div>
+
+            <div class="ready-editor-toolbar">
+              <div class="piece-palette" data-ready-piece-palette>
+                <button class="piece-chip active" data-ready-piece-button="P" type="button">
+                  ♙ White Pawn
+                </button>
+                <button class="piece-chip" data-ready-piece-button="N" type="button">
+                  ♘ White Knight
+                </button>
+                <button class="piece-chip" data-ready-piece-button="B" type="button">
+                  ♗ White Bishop
+                </button>
+                <button class="piece-chip" data-ready-piece-button="R" type="button">
+                  ♖ White Rook
+                </button>
+                <button class="piece-chip" data-ready-piece-button="Q" type="button">
+                  ♕ White Queen
+                </button>
+                <button class="piece-chip" data-ready-piece-button="K" type="button">
+                  ♔ White King
+                </button>
+                <button class="piece-chip" data-ready-piece-button="p" type="button">
+                  ♟ Black Pawn
+                </button>
+                <button class="piece-chip" data-ready-piece-button="n" type="button">
+                  ♞ Black Knight
+                </button>
+                <button class="piece-chip" data-ready-piece-button="b" type="button">
+                  ♝ Black Bishop
+                </button>
+                <button class="piece-chip" data-ready-piece-button="r" type="button">
+                  ♜ Black Rook
+                </button>
+                <button class="piece-chip" data-ready-piece-button="q" type="button">
+                  ♛ Black Queen
+                </button>
+                <button class="piece-chip" data-ready-piece-button="k" type="button">
+                  ♚ Black King
+                </button>
+                <button
+                  class="piece-chip danger-piece-chip"
+                  data-ready-piece-button="clear"
+                  type="button"
+                >
+                  Clear Square
+                </button>
+              </div>
+
+              <div class="ready-editor-actions">
+                <button class="secondary-link" data-ready-cancel-tool-button type="button">
+                  Cancel Tool
+                </button>
+                <button class="secondary-link" data-ready-reset-button type="button">
+                  Reset to Detected
+                </button>
+                <button class="secondary-link" data-ready-cancel-button type="button">
+                  Cancel
+                </button>
+                <button class="primary-button" data-ready-apply-button type="button">
+                  Apply Changes
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <p class="form-error" data-ready-error hidden></p>
+          <p class="save-feedback" data-ready-feedback hidden></p>
+        </section>
         <div class="analysis-playback">
           <button class="secondary-link" data-analysis-prev-button>
             Previous
@@ -179,10 +279,10 @@
 
         <div class="orientation-meta">
           <p class="selection-note" data-selection-note>
-            No square selected yet.
+            Tap the square where the white king started.
           </p>
           <div class="selection-badge" data-selection-badge hidden>
-            White king start square: <strong data-selection-badge-square>-</strong>
+            White king start marked
           </div>
           <p class="selection-note">
             Drag a corner handle if the outline misses the board.
@@ -265,99 +365,6 @@
           </div>
         </div>
 
-        <section class="ready-editor" data-ready-editor hidden>
-          <div class="ready-editor-header">
-            <div>
-              <h3>Correction Board</h3>
-              <p class="screen-subheading">
-                Tap any square, then place the correct piece. Changes stay in
-                draft until you apply them.
-              </p>
-            </div>
-            <div class="selection-badge ready-editor-square-badge" data-ready-selected-badge hidden>
-              Editing square: <strong data-ready-selected-square>-</strong>
-            </div>
-          </div>
-
-          <div class="ready-editor-layout">
-            <div class="analysis-board-shell ready-board-shell">
-              <div class="analysis-board ready-board" data-ready-board></div>
-            </div>
-
-            <div class="ready-editor-tools">
-              <div class="ready-editor-copy">
-                <p class="selection-note" data-ready-editor-note>
-                  Tap a square to start correcting the detected position.
-                </p>
-                <p class="selection-note">
-                  TODO: castling rights are still inferred automatically, and
-                  en passant remains disabled for now.
-                </p>
-              </div>
-
-              <div class="piece-palette" data-ready-piece-palette>
-                <button class="piece-chip active" data-ready-piece-button="P" type="button">
-                  ♙ White Pawn
-                </button>
-                <button class="piece-chip" data-ready-piece-button="N" type="button">
-                  ♘ White Knight
-                </button>
-                <button class="piece-chip" data-ready-piece-button="B" type="button">
-                  ♗ White Bishop
-                </button>
-                <button class="piece-chip" data-ready-piece-button="R" type="button">
-                  ♖ White Rook
-                </button>
-                <button class="piece-chip" data-ready-piece-button="Q" type="button">
-                  ♕ White Queen
-                </button>
-                <button class="piece-chip" data-ready-piece-button="K" type="button">
-                  ♔ White King
-                </button>
-                <button class="piece-chip" data-ready-piece-button="p" type="button">
-                  ♟ Black Pawn
-                </button>
-                <button class="piece-chip" data-ready-piece-button="n" type="button">
-                  ♞ Black Knight
-                </button>
-                <button class="piece-chip" data-ready-piece-button="b" type="button">
-                  ♝ Black Bishop
-                </button>
-                <button class="piece-chip" data-ready-piece-button="r" type="button">
-                  ♜ Black Rook
-                </button>
-                <button class="piece-chip" data-ready-piece-button="q" type="button">
-                  ♛ Black Queen
-                </button>
-                <button class="piece-chip" data-ready-piece-button="k" type="button">
-                  ♚ Black King
-                </button>
-                <button class="piece-chip danger-piece-chip" data-ready-piece-button="clear" type="button">
-                  Clear Square
-                </button>
-              </div>
-
-              <p class="form-error" data-ready-error hidden></p>
-              <p class="save-feedback" data-ready-feedback hidden></p>
-
-              <div class="step-actions">
-                <button class="secondary-link" data-ready-cancel-tool-button type="button">
-                  Cancel Tool
-                </button>
-                <button class="secondary-link" data-ready-reset-button type="button">
-                  Reset to Detected
-                </button>
-                <button class="secondary-link" data-ready-cancel-button type="button">
-                  Cancel
-                </button>
-                <button class="primary-button" data-ready-apply-button type="button">
-                  Done
-                </button>
-              </div>
-            </div>
-          </div>
-        </section>
-
         <div class="step-actions">
           <button class="secondary-link" data-reset-flow-button>Start Over</button>
           <button class="primary-button" data-continue-to-analysis-button>
@@ -376,9 +383,6 @@
           </button>
           <button class="secondary-link" data-delete-saved-button hidden>
             Delete Saved Position
-          </button>
-          <button class="secondary-link" data-analysis-flip-button>
-            Flip Board
           </button>
         </div>
 

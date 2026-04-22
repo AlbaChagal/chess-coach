@@ -28,6 +28,7 @@ from chesscoach.explanation.models import (
     TacticInfo,
 )
 from chesscoach.explanation.position_synthesizer import (
+    build_structured_position_explanation,
     candidate_line_has_aligned_continuations,
     extract_line_features,
     extract_line_features_for_lines,
@@ -58,6 +59,7 @@ __all__ = [
     "StructuredPositionExplanation",
     "StructuredPlayedMoveExplanation",
     "TacticInfo",
+    "build_structured_position_explanation",
     "candidate_line_has_aligned_continuations",
     "extract_line_features",
     "extract_line_features_for_lines",

@@ -27,6 +27,7 @@ from tests.vision.conftest import make_synthetic_board
 STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 STARTING_PLACEMENT = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
 AFTER_E4_FEN = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+AFTER_E4_READY_FEN = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1"
 PIECE_ROUTING_FEN = "4k3/8/8/3p4/2B1P3/8/4N3/4K3 w - - 0 1"
 
 
@@ -37,9 +38,9 @@ def _pick_free_port() -> int:
 
 
 def _analysis_result(fen: str = STARTING_FEN) -> AnalysisResult:
-    if fen == AFTER_E4_FEN:
+    if fen in {AFTER_E4_FEN, AFTER_E4_READY_FEN}:
         return AnalysisResult(
-            fen=AFTER_E4_FEN,
+            fen=fen,
             top_moves=[
                 MoveAnalysis(
                     "c5",
@@ -428,7 +429,16 @@ def _square_piece(page: Page, square: str) -> str:
 
 
 def _ready_square_piece(page: Page, square: str) -> str:
-    return page.locator(f"[data-ready-board] .square-{square} .piece-glyph").inner_text()
+    expect(page.locator("[data-analysis-board] .analysis-square")).to_have_count(64)
+    return page.locator(
+        f"[data-analysis-board] .square-{square} .piece-glyph"
+    ).inner_text()
+
+
+def _board_square_piece_by_index(page: Page, board_selector: str, index: int) -> str:
+    return page.locator(f"{board_selector} .analysis-square").nth(index).locator(
+        ".piece-glyph"
+    ).inner_text()
 
 
 def _capture_browser_errors(page: Page) -> list[str]:
@@ -452,9 +462,13 @@ def test_orientation_click_shows_visible_selected_square_feedback(
     _click_square(page, "[data-image-stage]", 0.5625, 0.9375)
 
     assert browser_errors == []
-    expect(page.locator("[data-selection-note]")).to_have_text("Selected square: e1.")
+    expect(page.locator("[data-selection-note]")).to_have_text(
+        "Selection saved. Continue if this matches where the white king started."
+    )
     expect(page.locator("[data-selection-badge]")).to_be_visible()
-    expect(page.locator("[data-selection-badge-square]")).to_have_text("e1")
+    expect(page.locator("[data-selection-badge]")).to_contain_text(
+        "White king start marked"
+    )
     expect(page.locator("[data-selected-marker]")).not_to_have_attribute("hidden", "")
 
 
@@ -480,7 +494,12 @@ def test_analysis_flow_renders_board_and_top_lines(
 
     page.locator('[data-step-nav="orientation"]').click()
     expect(page.get_by_text("Where did the white king start the game?")).to_be_visible()
-    expect(page.locator("[data-selection-badge-square]")).to_have_text("e1")
+    expect(page.locator("[data-selection-note]")).to_have_text(
+        "Selection saved. Continue if this matches where the white king started."
+    )
+    expect(page.locator("[data-selection-badge]")).to_contain_text(
+        "White king start marked"
+    )
     expect(page.locator("[data-analysis-source-card]")).to_be_visible()
 
     page.locator('[data-step-nav="side"]').click()
@@ -625,6 +644,9 @@ def test_analysis_playback_moves_board_forward_and_back(
     _upload_and_detect_board(page, live_server_url, board_image_path)
 
     _click_square(page, "[data-image-stage]", 0.5625, 0.9375)
+    expect(page.locator("[data-selection-badge]")).to_contain_text(
+        "White king start marked"
+    )
     page.locator("[data-orientation-continue-button]").click()
     page.locator('[data-side-option="w"]').click()
     page.locator("[data-complete-button]").click()
@@ -685,6 +707,9 @@ def test_analysis_board_accepts_legal_move_and_reanalyzes_position(
     _upload_and_detect_board(page, live_server_url, board_image_path)
 
     _click_square(page, "[data-image-stage]", 0.5625, 0.9375)
+    expect(page.locator("[data-selection-badge]")).to_contain_text(
+        "White king start marked"
+    )
     page.locator("[data-orientation-continue-button]").click()
     page.locator('[data-side-option="w"]').click()
     page.locator("[data-complete-button]").click()
@@ -700,10 +725,86 @@ def test_analysis_board_accepts_legal_move_and_reanalyzes_position(
     )
     page.locator("[data-analysis-board] .square-e4").click()
 
-    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 0 of 3")
+    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 1 of 4")
     expect(page.locator("[data-line-list] .line-card").first).to_contain_text("1. c5")
     assert _square_piece(page, "e2") == ""
     assert _square_piece(page, "e4") == "♙"
+
+    page.locator("[data-analysis-prev-button]").click()
+    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 0 of 4")
+    assert _square_piece(page, "e2") == "♙"
+    assert _square_piece(page, "e4") == ""
+    assert _square_piece(page, "c7") == "♟"
+    assert _square_piece(page, "c5") == ""
+
+    page.locator("[data-analysis-next-button]").click()
+    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 1 of 4")
+    assert _square_piece(page, "e2") == ""
+    assert _square_piece(page, "e4") == "♙"
+
+    page.locator("[data-analysis-next-button]").click()
+    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 2 of 4")
+    assert _square_piece(page, "c7") == ""
+    assert _square_piece(page, "c5") == "♟"
+
+    page.locator("[data-analysis-prev-button]").click()
+    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 1 of 4")
+    assert _square_piece(page, "e2") == ""
+    assert _square_piece(page, "e4") == "♙"
+
+    page.locator("[data-analysis-reset-button]").click()
+    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 0 of 4")
+    assert _square_piece(page, "e2") == "♙"
+    assert _square_piece(page, "e4") == ""
+    assert _square_piece(page, "c7") == "♟"
+    assert _square_piece(page, "c5") == ""
+
+    page.locator("[data-analysis-next-button]").click()
+    expect(page.locator("[data-analysis-step-note]")).to_have_text("Step 1 of 4")
+    assert _square_piece(page, "e2") == ""
+    assert _square_piece(page, "e4") == "♙"
+
+
+def test_capture_targets_use_centered_translucent_overlays(
+    page: Page,
+    piece_routing_server_url: str,
+    board_image_path: Path,
+) -> None:
+    _upload_and_detect_board(page, piece_routing_server_url, board_image_path)
+
+    _click_square(page, "[data-image-stage]", 0.5625, 0.9375)
+    page.locator("[data-orientation-continue-button]").click()
+    page.locator('[data-side-option="w"]').click()
+    page.locator("[data-complete-button]").click()
+    page.locator("[data-continue-to-analysis-button]").click()
+
+    page.locator("[data-analysis-board] .square-c4").click()
+
+    capture_square = page.locator("[data-analysis-board] .square-d5")
+    expect(capture_square).to_have_class(re.compile(r".*\bis-legal-target\b.*"))
+    expect(capture_square).to_have_class(re.compile(r".*\bis-legal-capture\b.*"))
+    assert _square_piece(page, "d5") == "♟"
+
+    overlay_style = capture_square.evaluate(
+        """(element) => {
+          const overlay = window.getComputedStyle(element, "::after");
+          const rect = element.getBoundingClientRect();
+          return {
+            top: overlay.top,
+            left: overlay.left,
+            transform: overlay.transform,
+            backgroundColor: overlay.backgroundColor,
+            borderTopColor: overlay.borderTopColor,
+            width: rect.width,
+            height: rect.height,
+          };
+        }"""
+    )
+    assert abs(float(overlay_style["top"].replace("px", "")) - overlay_style["height"] / 2) < 1
+    assert abs(float(overlay_style["left"].replace("px", "")) - overlay_style["width"] / 2) < 1
+    assert overlay_style["transform"] != "none"
+    assert overlay_style["backgroundColor"].startswith("rgba(")
+    assert overlay_style["borderTopColor"].startswith("rgba(")
 
 
 def test_ready_stage_editor_supports_move_tray_cancel_and_commit(
@@ -711,9 +812,11 @@ def test_ready_stage_editor_supports_move_tray_cancel_and_commit(
     live_server_url: str,
     board_image_path: Path,
 ) -> None:
+    browser_errors = _capture_browser_errors(page)
     _upload_and_detect_board(page, live_server_url, board_image_path)
 
     _click_square(page, "[data-image-stage]", 0.5625, 0.9375)
+    expect(page.locator("[data-orientation-continue-button]")).to_be_enabled()
     page.locator("[data-orientation-continue-button]").click()
     page.locator('[data-side-option="w"]').click()
     page.locator("[data-complete-button]").click()
@@ -721,20 +824,28 @@ def test_ready_stage_editor_supports_move_tray_cancel_and_commit(
 
     page.locator("[data-ready-edit-toggle-button]").click()
     expect(page.locator("[data-ready-editor]")).to_be_visible()
+    expect(page.locator("[data-analysis-board]")).to_be_visible()
+    expect(page.locator('[data-ready-piece-button="q"]')).to_be_visible()
+    board_box = page.locator("[data-analysis-board]").bounding_box()
+    editor_box = page.locator("[data-ready-editor]").bounding_box()
+    assert board_box is not None
+    assert editor_box is not None
+    assert editor_box["y"] >= board_box["y"]
+    assert editor_box["y"] - (board_box["y"] + board_box["height"]) < 260
     assert _ready_square_piece(page, "e2") == "♙"
     assert _ready_square_piece(page, "e4") == ""
 
-    page.locator("[data-ready-board] .square-e2").click()
-    page.locator("[data-ready-board] .square-e4").click()
+    page.locator("[data-analysis-board] .square-e2").click()
+    page.locator("[data-analysis-board] .square-e4").click()
     assert _ready_square_piece(page, "e2") == ""
     assert _ready_square_piece(page, "e4") == "♙"
 
     page.locator('[data-ready-piece-button="clear"]').click()
-    page.locator("[data-ready-board] .square-b1").click()
+    page.locator("[data-analysis-board] .square-b1").click()
     assert _ready_square_piece(page, "b1") == ""
 
     page.locator('[data-ready-piece-button="q"]').click()
-    page.locator("[data-ready-board] .square-b1").click()
+    page.locator("[data-analysis-board] .square-b1").click()
     assert _ready_square_piece(page, "b1") == "♛"
 
     page.locator("[data-ready-cancel-tool-button]").click()
@@ -750,17 +861,61 @@ def test_ready_stage_editor_supports_move_tray_cancel_and_commit(
     assert _ready_square_piece(page, "e4") == ""
     assert _ready_square_piece(page, "b1") == "♘"
 
-    page.locator("[data-ready-board] .square-e2").click()
-    page.locator("[data-ready-board] .square-e4").click()
+    page.locator('[data-ready-piece-button="clear"]').click()
+    page.locator("[data-analysis-board] .square-d8").click()
+    assert _ready_square_piece(page, "d8") == ""
+    page.locator("[data-ready-cancel-tool-button]").click()
+
+    page.locator('[data-ready-piece-button="q"]').click()
+    page.locator("[data-analysis-board] .square-b1").click()
+    assert _ready_square_piece(page, "b1") == "♛"
+
     page.locator("[data-ready-apply-button]").click()
 
+    assert browser_errors == []
     expect(page.locator("[data-ready-editor]")).to_be_hidden()
     expect(page.locator("[data-ready-fen]")).to_contain_text(
-        "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1"
+        "rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RqBQKBNR w KQkq - 0 1"
     )
 
     page.locator("[data-continue-to-analysis-button]").click()
     expect(page.locator("[data-analysis-layout]")).to_be_visible()
+    assert _square_piece(page, "e2") == "♙"
+    assert _square_piece(page, "e4") == ""
+    assert _square_piece(page, "b1") == "♛"
+    assert _square_piece(page, "d8") == ""
+
+
+def test_ready_stage_apply_invalidates_stale_analysis_and_reuses_committed_fen(
+    page: Page,
+    live_server_url: str,
+    board_image_path: Path,
+) -> None:
+    _upload_and_detect_board(page, live_server_url, board_image_path)
+
+    _click_square(page, "[data-image-stage]", 0.5625, 0.9375)
+    page.locator("[data-orientation-continue-button]").click()
+    page.locator('[data-side-option="w"]').click()
+    page.locator("[data-complete-button]").click()
+    page.locator("[data-continue-to-analysis-button]").click()
+
+    expect(page.locator("[data-line-list] .line-card").first).to_contain_text("1. e4")
+    assert _square_piece(page, "e2") == "♙"
+    assert _square_piece(page, "e4") == ""
+
+    page.locator('[data-step-nav="ready"]').click()
+    page.locator("[data-ready-edit-toggle-button]").click()
+    page.locator("[data-analysis-board] .square-e2").click()
+    page.locator("[data-analysis-board] .square-e4").click()
+    page.locator("[data-ready-apply-button]").click()
+
+    expect(page.locator("[data-ready-editor]")).to_be_hidden()
+    expect(page.locator("[data-ready-fen]")).to_contain_text(AFTER_E4_READY_FEN)
+
+    page.locator('[data-step-nav="analysis"]').click()
+
+    expect(page.locator("[data-analysis-layout]")).to_be_visible()
+    expect(page.locator("[data-line-list] .line-card").first).to_contain_text("1. c5")
     assert _square_piece(page, "e2") == ""
     assert _square_piece(page, "e4") == "♙"
 
@@ -773,6 +928,7 @@ def test_ready_stage_editor_reset_and_invalid_validation(
     _upload_and_detect_board(page, live_server_url, board_image_path)
 
     _click_square(page, "[data-image-stage]", 0.5625, 0.9375)
+    expect(page.locator("[data-orientation-continue-button]")).to_be_enabled()
     page.locator("[data-orientation-continue-button]").click()
     page.locator('[data-side-option="w"]').click()
     page.locator("[data-complete-button]").click()
@@ -781,7 +937,7 @@ def test_ready_stage_editor_reset_and_invalid_validation(
     expect(page.locator("[data-ready-editor]")).to_be_visible()
 
     page.locator('[data-ready-piece-button="clear"]').click()
-    page.locator("[data-ready-board] .square-e1").click()
+    page.locator("[data-analysis-board] .square-e1").click()
     expect(page.locator("[data-ready-error]")).to_have_text(
         "The board must contain exactly one white king."
     )
@@ -793,3 +949,37 @@ def test_ready_stage_editor_reset_and_invalid_validation(
     expect(page.locator("[data-ready-feedback]")).to_have_text(
         "Draft restored to the detected position."
     )
+
+
+def test_ready_stage_flip_board_updates_ready_and_analysis_perspective(
+    page: Page,
+    live_server_url: str,
+    board_image_path: Path,
+) -> None:
+    browser_errors = _capture_browser_errors(page)
+    _upload_and_detect_board(page, live_server_url, board_image_path)
+
+    _click_square(page, "[data-image-stage]", 0.5625, 0.9375)
+    assert browser_errors == []
+    expect(page.locator("[data-selection-note]")).to_have_text(
+        "Selection saved. Continue if this matches where the white king started."
+    )
+    expect(page.locator("[data-orientation-continue-button]")).to_be_enabled()
+    page.locator("[data-orientation-continue-button]").click()
+    page.locator('[data-side-option="w"]').click()
+    page.locator("[data-complete-button]").click()
+
+    expect(page.locator("[data-ready-flip-button]")).to_have_count(0)
+    expect(page.locator("[data-analysis-flip-button]")).to_have_text("Flip Board")
+    expect(page.locator('button:has-text("Flip Board"):visible')).to_have_count(1)
+    assert _board_square_piece_by_index(page, "[data-analysis-board]", 0) == "♜"
+
+    page.locator("[data-analysis-flip-button]").click()
+
+    expect(page.locator("[data-analysis-flip-button]")).to_have_text("Flip Board")
+    assert _board_square_piece_by_index(page, "[data-analysis-board]", 0) == "♖"
+
+    page.locator("[data-continue-to-analysis-button]").click()
+    expect(page.locator("[data-analysis-layout]")).to_be_visible()
+    expect(page.locator("[data-analysis-flip-button]")).to_have_text("Flip Board")
+    assert _board_square_piece_by_index(page, "[data-analysis-board]", 0) == "♖"
