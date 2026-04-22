@@ -140,6 +140,18 @@ def test_build_structured_explanation_includes_alternatives() -> None:
     assert structured.alternatives[0].move_san == "d4"
 
 
+def test_build_structured_explanation_includes_position_context() -> None:
+    explainer = _make_explainer()
+    explained = explainer.analyze_position(STARTING_FEN)
+
+    structured = explainer.build_structured_explanation(explained)
+
+    assert structured.position_context is not None
+    assert structured.position_context.position_summary
+    assert structured.position_context.shared_plan
+    assert "broader plan" in structured.why_it_is_best
+
+
 def test_build_played_move_result_returns_quality_fields() -> None:
     explainer = _make_explainer()
     explained = explainer.analyze_move(STARTING_FEN, "e2e4")
@@ -170,6 +182,17 @@ def test_build_structured_played_move_explanation_returns_typed_payload() -> Non
     assert isinstance(structured, StructuredPlayedMoveExplanation)
     assert structured.summary
     assert structured.practical_lesson
+
+
+def test_build_structured_played_move_explanation_includes_position_context() -> None:
+    explainer = _make_explainer()
+    explained = explainer.analyze_move(STARTING_FEN, "d2d4")
+
+    structured = explainer.build_structured_played_move_explanation(explained)
+
+    assert structured.position_context is not None
+    assert structured.position_context.what_all_good_lines_have_in_common
+    assert "shared plan" in structured.what_was_missed
 
 
 def test_narrate_played_move_explanation_uses_provider_once() -> None:
@@ -203,6 +226,48 @@ def test_narrate_explanation_uses_structured_input() -> None:
 
     assert text == "Strong center control."
     provider.complete.assert_called_once()
+
+
+def test_analyze_position_theme_returns_position_theme() -> None:
+    from chesscoach.explanation.models import PositionTheme
+
+    explainer = _make_explainer()
+
+    theme = explainer.analyze_position_theme(STARTING_FEN)
+
+    assert isinstance(theme, PositionTheme)
+    assert theme.summary
+
+
+def test_build_structured_position_explanation_returns_typed_payload() -> None:
+    from chesscoach.explanation.models import StructuredPositionExplanation
+
+    explainer = _make_explainer()
+
+    structured = explainer.build_structured_position_explanation(STARTING_FEN)
+
+    assert isinstance(structured, StructuredPositionExplanation)
+    assert structured.position_summary
+    assert structured.candidate_move_roles
+
+
+def test_analyze_position_reuses_prefetched_engine_moves() -> None:
+    engine = MagicMock()
+    engine.get_best_moves.side_effect = [
+        [
+            MoveAnalysis("e4", "e2e4", 35, None, 20, ["e5"], ["e7e5"]),
+            MoveAnalysis("d4", "d2d4", 30, None, 20, ["d5"], ["d7d5"]),
+        ],
+        [
+            MoveAnalysis("e5", "e7e5", -20, None, 20, ["Nf3"], ["g1f3"]),
+        ],
+    ]
+    explainer = Explainer(engine, None)
+
+    result = explainer.analyze_position(STARTING_FEN)
+
+    assert result.best_move.move_uci == "e2e4"
+    assert engine.get_best_moves.call_count == 2
 
 
 def test_explain_legacy_interface_works() -> None:

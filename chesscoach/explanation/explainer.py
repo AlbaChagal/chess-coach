@@ -14,10 +14,18 @@ from chesscoach.explanation.models import (
     BestMoveComparison,
     ExplainedMove,
     ExplanationError,
+    PositionContext,
+    PositionTheme,
     PlayedMoveResult,
     StructuredExplanation,
+    StructuredPositionExplanation,
     StructuredPlayedMoveExplanation,
     TacticInfo,
+)
+from chesscoach.explanation.position_synthesizer import (
+    build_structured_position_explanation,
+    normalize_move_analyses,
+    synthesize_position_theme,
 )
 from chesscoach.explanation.prompt import (
     build_best_move_prompt,
@@ -65,7 +73,20 @@ class Explainer:
             raise ValueError("Engine returned no moves for this position.")
 
         best_move = engine_moves[0]
-        return self.analyze_move(fen_before, best_move.move_uci)
+        return self._analyze_move_from_engine_moves(fen_before, best_move.move_uci, engine_moves)
+
+    def analyze_position_theme(self, fen_before: str) -> PositionTheme:
+        """Build the synthesized position theme for a full position."""
+        engine_moves = self._get_engine_moves_for_fen(fen_before)
+        return self._build_position_context_from_engine_moves(engine_moves)[0]
+
+    def build_structured_position_explanation(
+        self,
+        fen_before: str,
+    ) -> StructuredPositionExplanation:
+        """Build a deterministic position-level explanation from engine analysis."""
+        engine_moves = self._get_engine_moves_for_fen(fen_before)
+        return self._build_position_context_from_engine_moves(engine_moves)[1]
 
     def build_structured_explanation(
         self,
@@ -78,6 +99,12 @@ class Explainer:
         what_the_move_does = _build_what_the_move_does(best_move)
         what_it_threatens = _build_what_it_threatens(explained.tactics_after_best)
         why_it_is_best = _build_why_it_is_best(best_move, explained.alternatives)
+        position_context = self._build_position_context_from_explained_move(explained)
+        summary = _enrich_summary_with_position_context(summary, position_context)
+        why_it_is_best = _enrich_best_move_reason_with_position_context(
+            why_it_is_best,
+            position_context,
+        )
         alternatives = _build_alternative_explanations(
             best_move,
             explained.alternatives,
@@ -93,6 +120,7 @@ class Explainer:
             why_alternatives_are_worse=why_alternatives_are_worse,
             alternatives=alternatives,
             tactical_themes=tactical_themes,
+            position_context=position_context,
         )
 
     def narrate_explanation(
@@ -151,15 +179,29 @@ class Explainer:
             explained.best_move,
             explained.alternatives,
         )
+        position_context = self._build_position_context_from_explained_move(explained)
+        what_was_missed = _enrich_what_was_missed_with_position_context(
+            _build_what_was_missed(explained),
+            position_context,
+        )
+        why_best_move_was_better = _enrich_gap_with_position_context(
+            _build_played_move_best_move_gap(explained),
+            position_context,
+        )
+        practical_lesson = _enrich_practical_lesson_with_position_context(
+            _build_practical_lesson(explained),
+            position_context,
+        )
         return StructuredPlayedMoveExplanation(
             summary=_build_played_move_summary(explained),
             what_the_move_tried_to_do=_build_played_move_intent(explained),
-            what_was_missed=_build_what_was_missed(explained),
+            what_was_missed=what_was_missed,
             what_changed_after_move=_build_what_changed_after_move(explained),
-            why_best_move_was_better=_build_played_move_best_move_gap(explained),
-            practical_lesson=_build_practical_lesson(explained),
+            why_best_move_was_better=why_best_move_was_better,
+            practical_lesson=practical_lesson,
             tactical_themes=_collect_tactical_themes(explained.tactics_after_best),
             alternatives=alternatives,
+            position_context=position_context,
         )
 
     def narrate_played_move_explanation(
@@ -190,55 +232,8 @@ class Explainer:
         Raises:
             ValueError: If the FEN is invalid or the move is illegal.
         """
-        board = self._parse_fen(fen_before)
-        move = self._parse_move(board, move_uci)
-        move_san = board.san(move)
-
-        LOGGER.info(
-            "Analyzing move=%s fen=%s",
-            move_san,
-            fen_before[:40] + "...",
-        )
-
-        # 1. Engine analysis of the position before the move.
-        engine_moves = self._engine.get_best_moves(board, self._top_n)
-        if not engine_moves:
-            raise ValueError("Engine returned no moves for this position.")
-        best_move = engine_moves[0]
-        alternatives = engine_moves[1:]
-
-        # 2. Evaluate the position after the played move to get played_cp.
-        played_cp, played_mate = self._eval_after(board, move)
-
-        # 3. Classify the move quality.
-        quality = classify_move(
-            played_cp=played_cp,
-            best_cp=best_move.score_cp,
-            played_mate=played_mate,
-            best_mate=best_move.score_mate,
-        )
-        LOGGER.debug("Move quality: label=%s cp_loss=%s", quality.label, quality.cp_loss)
-
-        # 4. Detect tactics after the played move (what opponent can do).
-        tactics_after_played = detect_tactics(board, move)
-
-        # 5. Detect tactics after the best move (what we could have gained).
-        try:
-            best_chess_move = chess.Move.from_uci(best_move.move_uci)
-            tactics_after_best = detect_tactics(board, best_chess_move)
-        except (ValueError, chess.InvalidMoveError):
-            tactics_after_best = []
-
-        return ExplainedMove(
-            fen_before=fen_before,
-            move_played_san=move_san,
-            move_played_uci=move_uci,
-            quality=quality,
-            best_move=best_move,
-            alternatives=alternatives,
-            tactics_after_played=tactics_after_played,
-            tactics_after_best=tactics_after_best,
-        )
+        engine_moves = self._get_engine_moves_for_fen(fen_before)
+        return self._analyze_move_from_engine_moves(fen_before, move_uci, engine_moves)
 
     def explain_move(self, fen_before: str, move_uci: str) -> str:
         """Full pipeline: analyze → build prompt → LLM → coaching text.
@@ -327,6 +322,84 @@ class Explainer:
         if a.score_cp is not None:
             return -a.score_cp, None
         return None, None
+
+    def _get_engine_moves_for_fen(self, fen_before: str) -> list[MoveAnalysis]:
+        """Return engine moves for a validated position."""
+        board = self._parse_fen(fen_before)
+        engine_moves = self._engine.get_best_moves(board, self._top_n)
+        if not engine_moves:
+            raise ValueError("Engine returned no moves for this position.")
+        return engine_moves
+
+    def _analyze_move_from_engine_moves(
+        self,
+        fen_before: str,
+        move_uci: str,
+        engine_moves: list[MoveAnalysis],
+    ) -> ExplainedMove:
+        """Analyze one move using pre-fetched engine moves for the position."""
+        board = self._parse_fen(fen_before)
+        move = self._parse_move(board, move_uci)
+        move_san = board.san(move)
+
+        LOGGER.info(
+            "Analyzing move=%s fen=%s",
+            move_san,
+            fen_before[:40] + "...",
+        )
+
+        best_move = engine_moves[0]
+        alternatives = engine_moves[1:]
+        played_cp, played_mate = self._eval_after(board, move)
+        quality = classify_move(
+            played_cp=played_cp,
+            best_cp=best_move.score_cp,
+            played_mate=played_mate,
+            best_mate=best_move.score_mate,
+        )
+        LOGGER.debug("Move quality: label=%s cp_loss=%s", quality.label, quality.cp_loss)
+        tactics_after_played = detect_tactics(board, move)
+        try:
+            best_chess_move = chess.Move.from_uci(best_move.move_uci)
+            tactics_after_best = detect_tactics(board, best_chess_move)
+        except (ValueError, chess.InvalidMoveError):
+            tactics_after_best = []
+        return ExplainedMove(
+            fen_before=fen_before,
+            move_played_san=move_san,
+            move_played_uci=move_uci,
+            quality=quality,
+            best_move=best_move,
+            alternatives=alternatives,
+            tactics_after_played=tactics_after_played,
+            tactics_after_best=tactics_after_best,
+        )
+
+    def _build_position_context_from_explained_move(
+        self,
+        explained: ExplainedMove,
+    ) -> PositionContext:
+        """Build shared position context from the explained best line and alternatives."""
+        engine_moves = [explained.best_move, *explained.alternatives]
+        _, structured = self._build_position_context_from_engine_moves(engine_moves)
+        return PositionContext(
+            position_summary=structured.position_summary,
+            shared_plan=structured.shared_plan,
+            what_all_good_lines_have_in_common=(
+                structured.what_all_good_lines_have_in_common
+            ),
+            what_to_watch_out_for=structured.what_to_watch_out_for,
+        )
+
+    @staticmethod
+    def _build_position_context_from_engine_moves(
+        engine_moves: list[MoveAnalysis],
+    ) -> tuple[PositionTheme, StructuredPositionExplanation]:
+        """Build reusable position context from already-fetched engine moves."""
+        candidate_lines = normalize_move_analyses(engine_moves)
+        theme = synthesize_position_theme(candidate_lines)
+        structured = build_structured_position_explanation(candidate_lines, theme=theme)
+        return theme, structured
 
 
 def _collect_tactical_themes(tactics: list[TacticInfo]) -> list[str]:
@@ -480,4 +553,51 @@ def _build_practical_lesson(explained: ExplainedMove) -> str:
     return (
         "Before committing, compare your move with the engine's most active option "
         "and check what concrete pressure you are giving up."
+    )
+
+
+def _enrich_summary_with_position_context(
+    summary: str,
+    position_context: PositionContext,
+) -> str:
+    return f"{summary} Positionally, {position_context.shared_plan.lower()}"
+
+
+def _enrich_best_move_reason_with_position_context(
+    why_it_is_best: str,
+    position_context: PositionContext,
+) -> str:
+    return (
+        f"{why_it_is_best} It fits the broader plan: "
+        f"{position_context.what_all_good_lines_have_in_common.lower()}"
+    )
+
+
+def _enrich_what_was_missed_with_position_context(
+    what_was_missed: str,
+    position_context: PositionContext,
+) -> str:
+    return (
+        f"{what_was_missed} More broadly, the move misses the shared plan: "
+        f"{position_context.shared_plan.lower()}"
+    )
+
+
+def _enrich_gap_with_position_context(
+    why_best_move_was_better: str,
+    position_context: PositionContext,
+) -> str:
+    return (
+        f"{why_best_move_was_better} The stronger route matched the position's "
+        f"main idea: {position_context.what_all_good_lines_have_in_common.lower()}"
+    )
+
+
+def _enrich_practical_lesson_with_position_context(
+    practical_lesson: str,
+    position_context: PositionContext,
+) -> str:
+    return (
+        f"{practical_lesson} Also ask which move best serves the shared plan: "
+        f"{position_context.shared_plan.lower()}"
     )
