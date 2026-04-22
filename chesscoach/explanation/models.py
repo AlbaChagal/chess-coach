@@ -101,6 +101,16 @@ class StructuredPositionExplanation:
 
 
 @dataclass(frozen=True)
+class PositionContext:
+    """Shared position-level context for move-focused explanations."""
+
+    position_summary: str
+    shared_plan: str
+    what_all_good_lines_have_in_common: str
+    what_to_watch_out_for: str
+
+
+@dataclass(frozen=True)
 class ExplainedMove:
     """Fully analysed move: classification, tactics, and engine alternatives."""
 
@@ -135,6 +145,7 @@ class StructuredExplanation:
     why_alternatives_are_worse: str
     alternatives: list[AlternativeExplanation]
     tactical_themes: list[str]
+    position_context: PositionContext | None = None
 
 
 @dataclass(frozen=True)
@@ -176,6 +187,7 @@ class StructuredPlayedMoveExplanation:
     practical_lesson: str
     tactical_themes: list[str]
     alternatives: list[AlternativeExplanation]
+    position_context: PositionContext | None = None
 
 
 class ExplanationError(Exception):
