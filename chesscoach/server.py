@@ -102,6 +102,19 @@ class AnalyzeApiRequest(BaseModel):
     top_n: int = Field(default=3, ge=1)
 
 
+class LegalMovesApiRequest(BaseModel):
+    """Request body for legal move lookup."""
+
+    fen: str
+
+
+class PlayMoveApiRequest(BaseModel):
+    """Request body for validating and applying one legal move."""
+
+    fen: str
+    move_uci: str
+
+
 class ExplainApiRequest(BaseModel):
     """Request body for optional explanation generation."""
 
@@ -530,6 +543,37 @@ def create_app() -> FastAPI:
             "analysis": serialize_pipeline_value(analysis),
         }
 
+    @app.post("/legal-moves")
+    def legal_moves(payload: LegalMovesApiRequest) -> dict[str, object]:
+        """Return legal moves for a full FEN so the UI can validate board input."""
+        board = _board_from_fen(payload.fen)
+        return {
+            "status": "success",
+            "fen": board.fen(),
+            "legal_moves": serialize_pipeline_value(_serialize_legal_moves(board)),
+        }
+
+    @app.post("/play-move")
+    def play_move(payload: PlayMoveApiRequest) -> dict[str, object]:
+        """Apply one legal move to a FEN and return the resulting position."""
+        board = _board_from_fen(payload.fen)
+        try:
+            move = chess.Move.from_uci(payload.move_uci)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Invalid move_uci.") from exc
+        if move not in board.legal_moves:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Illegal move {payload.move_uci!r} for position {board.fen()!r}.",
+            )
+        board.push(move)
+        position = _completed_position_from_fen(board.fen())
+        return {
+            "status": "success",
+            "position": serialize_pipeline_value(position),
+            "legal_moves": serialize_pipeline_value(_serialize_legal_moves(board)),
+        }
+
     @app.post("/explain")
     def explain(payload: ExplainApiRequest) -> dict[str, object]:
         """Run analysis and optional explanation as a separate backend step."""
@@ -728,14 +772,7 @@ def _fallback_board_corners(width: int, height: int) -> np.ndarray:
 
 def _completed_position_from_fen(fen: str) -> CompletedPosition:
     """Parse a full FEN string into the pipeline's completed-position model."""
-    try:
-        board = chess.Board(fen)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if not board.is_valid():
-        raise HTTPException(
-            status_code=422, detail=f"Invalid board position in FEN: {fen!r}"
-        )
+    board = _board_from_fen(fen)
     return CompletedPosition(
         fen=board.fen(),
         fen_placement=board.board_fen(),
@@ -748,6 +785,37 @@ def _completed_position_from_fen(fen: str) -> CompletedPosition:
         user_confirmed_orientation=True,
         white_king_start_click=ImageClick(x=0.0, y=0.0),
     )
+
+
+def _board_from_fen(fen: str) -> chess.Board:
+    """Parse and validate a full FEN string."""
+    try:
+        board = chess.Board(fen)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not board.is_valid():
+        raise HTTPException(
+            status_code=422, detail=f"Invalid board position in FEN: {fen!r}"
+        )
+    return board
+
+
+def _serialize_legal_moves(board: chess.Board) -> list[dict[str, str | None]]:
+    """Serialize legal moves with square-level metadata for the browser UI."""
+    moves: list[dict[str, str | None]] = []
+    for move in board.legal_moves:
+        moves.append(
+            {
+                "uci": move.uci(),
+                "san": board.san(move),
+                "from": chess.square_name(move.from_square),
+                "to": chess.square_name(move.to_square),
+                "promotion": None
+                if move.promotion is None
+                else chess.piece_symbol(move.promotion),
+            }
+        )
+    return moves
 
 
 def _literal_side_to_move(side_to_move: str) -> Literal["w", "b"]:

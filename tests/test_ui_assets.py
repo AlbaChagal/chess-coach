@@ -89,6 +89,50 @@ def test_analysis_board_renderer_is_hardened_against_partial_dom_state() -> None
     assert "min-height: 0;" in styles
 
 
+def test_top_lines_render_per_line_explain_actions() -> None:
+    script = (PROJECT_ROOT / "chesscoach/static/app.js").read_text()
+    styles = (PROJECT_ROOT / "chesscoach/static/app.css").read_text()
+    template = (PROJECT_ROOT / "chesscoach/templates/app_shell.html").read_text()
+
+    assert 'data-played-move-form' not in template
+    assert "Request an explanation for any suggested line or tap the board" in template
+    assert "requestedLineIndex: null," in script
+    assert "requestedMoveUci: null," in script
+    assert 'data-line-explain-button="${index}"' in script
+    assert 'data-line-select-button="${index}"' in script
+    assert 'requestExplanationForLine(index);' in script
+    assert 'requestExplanation("best_move", null, index);' in script
+    assert 'requestExplanation("played_move", selectedMove.move_uci, index);' in (
+        script
+    )
+    assert ".line-card-select {" in styles
+    assert ".line-card-actions {" in styles
+    assert ".line-explain-button {" in styles
+    assert ".interactive-board-note {" in styles
+
+
+def test_interactive_analysis_board_uses_backend_legal_moves_and_move_application() -> None:
+    script = (PROJECT_ROOT / "chesscoach/static/app.js").read_text()
+    styles = (PROJECT_ROOT / "chesscoach/static/app.css").read_text()
+    template = (PROJECT_ROOT / "chesscoach/templates/app_shell.html").read_text()
+
+    assert 'data-legal-moves-endpoint="/legal-moves"' in template
+    assert 'data-play-move-endpoint="/play-move"' in template
+    assert "interactiveLegalMoves: []," in script
+    assert "interactiveLegalMovesFen: \"\"," in script
+    assert "interactiveTargetSquares: []," in script
+    assert "function ensureInteractiveLegalMoves(fen)" in script
+    assert "function handleAnalysisBoardClick(event)" in script
+    assert "function applyInteractiveMove(fen, moveUci)" in script
+    assert "clearAnalysisInteraction();" in script
+    assert "state.analysis.interactiveTargetSquares = [" in script
+    assert 'body: JSON.stringify({ fen })' in script
+    assert 'body: JSON.stringify({' in script
+    assert 'move_uci: moveUci,' in script
+    assert ".analysis-square.is-selected {" in styles
+    assert ".analysis-square.is-legal-target::after {" in styles
+
+
 def test_starting_board_preview_is_rendered_from_known_fen() -> None:
     script = (PROJECT_ROOT / "chesscoach/static/app.js").read_text()
 
@@ -137,3 +181,33 @@ def test_orientation_manual_corner_correction_is_wired() -> None:
     assert 'stage.addEventListener("pointerdown", handleStagePointerDown);' in script
     assert 'stage.addEventListener("pointermove", handleStagePointerMove);' in script
     assert "function resetBoardCorners()" in script
+
+
+def test_ready_stage_editor_assets_and_validation_are_wired() -> None:
+    script = (PROJECT_ROOT / "chesscoach/static/app.js").read_text()
+    styles = (PROJECT_ROOT / "chesscoach/static/app.css").read_text()
+    template = (PROJECT_ROOT / "chesscoach/templates/app_shell.html").read_text()
+
+    assert 'data-ready-edit-toggle-button' in template
+    assert 'data-ready-editor' in template
+    assert 'data-ready-board' in template
+    assert 'data-ready-piece-button="clear"' in template
+    assert 'data-ready-cancel-tool-button' in template
+    assert 'data-ready-reset-button' in template
+    assert 'data-ready-cancel-button' in template
+    assert 'data-ready-apply-button' in template
+    assert "function createReadyEditorState()" in script
+    assert "function validateReadyPlacement(placementText)" in script
+    assert ('return "The board must contain exactly one white king.";') in script
+    assert ('return "The board must contain exactly one black king.";') in script
+    assert (
+        'return "Pawns cannot be placed on the first or eighth rank.";'
+    ) in script
+    assert "function handleReadyBoardClick(event)" in script
+    assert "function applyReadyEditor()" in script
+    assert 'state.readyEditor.draftPlacement = state.readyEditor.detectedPlacement;' in script
+    assert 'state.readyEditor.draftPlacement = payload.position.fen_placement;' in script
+    assert ".ready-editor {" in styles
+    assert ".piece-palette {" in styles
+    assert ".piece-chip {" in styles
+    assert ".ready-board .analysis-square.is-selected {" in styles

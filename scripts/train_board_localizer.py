@@ -31,6 +31,8 @@ except ModuleNotFoundError:  # pragma: no cover - direct script execution fallba
 LOGGER = logging.getLogger(__name__)
 _TRAIN_LOG_EVERY = 10
 _DEFAULT_PATIENCE = 5
+_EDGE_LENGTH_LOSS_WEIGHT = 1.0
+_AREA_LOSS_WEIGHT = 0.5
 
 
 def _resolve_manifest_path(
@@ -62,6 +64,59 @@ def _pixel_corner_error(
     return deltas.pow(2).sum(dim=2).sqrt().mean(dim=1)
 
 
+def _edge_length_features(corners: torch.Tensor) -> torch.Tensor:
+    """Return ordered board-edge lengths for flattened corner tensors."""
+    ordered_corners = corners.view(-1, 4, 2)
+    edge_starts = ordered_corners
+    edge_ends = torch.roll(ordered_corners, shifts=-1, dims=1)
+    return (edge_starts - edge_ends).pow(2).sum(dim=2).sqrt()
+
+
+def _quadrilateral_area(corners: torch.Tensor) -> torch.Tensor:
+    """Return quadrilateral areas for flattened corner tensors."""
+    ordered_corners = corners.view(-1, 4, 2)
+    x = ordered_corners[:, :, 0]
+    y = ordered_corners[:, :, 1]
+    cross_terms = x * torch.roll(y, shifts=-1, dims=1)
+    reverse_cross_terms = y * torch.roll(x, shifts=-1, dims=1)
+    return 0.5 * torch.abs((cross_terms - reverse_cross_terms).sum(dim=1))
+
+
+def _board_localizer_loss_components(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    criterion: torch.nn.Module,
+) -> dict[str, torch.Tensor]:
+    """Return the composite localizer loss terms."""
+    corner_loss = criterion(predictions, targets)
+    predicted_edges = _edge_length_features(predictions)
+    target_edges = _edge_length_features(targets)
+    edge_loss = torch.nn.functional.smooth_l1_loss(predicted_edges, target_edges)
+    predicted_area = _quadrilateral_area(predictions)
+    target_area = _quadrilateral_area(targets)
+    area_loss = torch.nn.functional.smooth_l1_loss(predicted_area, target_area)
+    total_loss = (
+        corner_loss
+        + _EDGE_LENGTH_LOSS_WEIGHT * edge_loss
+        + _AREA_LOSS_WEIGHT * area_loss
+    )
+    return {
+        "total": total_loss,
+        "corner": corner_loss,
+        "edge": edge_loss,
+        "area": area_loss,
+    }
+
+
+def _board_localizer_loss(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    criterion: torch.nn.Module,
+) -> torch.Tensor:
+    """Return the scalar composite loss used for localizer training."""
+    return _board_localizer_loss_components(predictions, targets, criterion)["total"]
+
+
 def _evaluate_model(
     model: torch.nn.Module,
     dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor]],
@@ -70,7 +125,6 @@ def _evaluate_model(
 ) -> tuple[float, float, float]:
     model.eval()
     total_loss = 0.0
-    total_mean_corner_error_norm = 0.0
     total_mean_corner_error_px = 0.0
     total_leq_20px = 0
     total_samples = 0
@@ -80,16 +134,10 @@ def _evaluate_model(
             targets = targets.to(device)
             sizes = sizes.to(device)
             predictions = model(images)
-            loss = criterion(predictions, targets)
-            sample_errors_norm = _pixel_corner_error(
-                predictions,
-                targets,
-                torch.ones_like(sizes),
-            )
+            loss = _board_localizer_loss(predictions, targets, criterion)
             sample_errors_px = _pixel_corner_error(predictions, targets, sizes)
             batch_size = images.shape[0]
             total_loss += float(loss.item()) * batch_size
-            total_mean_corner_error_norm += float(sample_errors_norm.sum().item())
             total_mean_corner_error_px += float(sample_errors_px.sum().item())
             total_leq_20px += int((sample_errors_px <= 20.0).sum().item())
             total_samples += batch_size
@@ -228,6 +276,8 @@ def train_board_localizer(
         "augmentation": "perspective_jitter,color_jitter,blur",
         "architecture": BOARD_LOCALIZER_ARCHITECTURE,
         "selection_metric": "val_mean_corner_error_px",
+        "edge_length_loss_weight": _EDGE_LENGTH_LOSS_WEIGHT,
+        "area_loss_weight": _AREA_LOSS_WEIGHT,
         "hard_example_weights": str(hard_example_weights)
         if hard_example_weights is not None
         else "",
@@ -236,22 +286,42 @@ def train_board_localizer(
         for epoch in range(1, epochs + 1):
             model.train()
             epoch_loss = 0.0
+            epoch_corner_loss = 0.0
+            epoch_edge_loss = 0.0
+            epoch_area_loss = 0.0
             for step, (images, targets, _sizes) in enumerate(train_dl, start=1):
                 images = images.to(device)
                 targets = targets.to(device)
                 optimizer.zero_grad()
                 predictions = model(images)
-                loss = criterion(predictions, targets)
+                loss_components = _board_localizer_loss_components(
+                    predictions,
+                    targets,
+                    criterion,
+                )
+                loss = loss_components["total"]
                 loss.backward()
                 optimizer.step()
-                epoch_loss += float(loss.item()) * images.shape[0]
+                batch_size = images.shape[0]
+                epoch_loss += float(loss.item()) * batch_size
+                epoch_corner_loss += float(loss_components["corner"].item()) * batch_size
+                epoch_edge_loss += float(loss_components["edge"].item()) * batch_size
+                epoch_area_loss += float(loss_components["area"].item()) * batch_size
                 if step == 1 or step % _TRAIN_LOG_EVERY == 0:
                     LOGGER.info(
                         f"Board localizer epoch={epoch}/{epochs} "
-                        f"step={step}/{len(train_dl)} loss={loss.item():.4f}"
+                        f"step={step}/{len(train_dl)} loss={loss.item():.4f} "
+                        f"corner={loss_components['corner'].item():.4f} "
+                        f"edge={loss_components['edge'].item():.4f} "
+                        f"area={loss_components['area'].item():.4f}"
                     )
 
             train_loss = epoch_loss / len(train_ds) if len(train_ds) else 0.0
+            train_corner_loss = (
+                epoch_corner_loss / len(train_ds) if len(train_ds) else 0.0
+            )
+            train_edge_loss = epoch_edge_loss / len(train_ds) if len(train_ds) else 0.0
+            train_area_loss = epoch_area_loss / len(train_ds) if len(train_ds) else 0.0
             val_loss, val_mean_corner_error_px, val_boards_leq_20px = _evaluate_model(
                 model,
                 val_dl,
@@ -262,6 +332,9 @@ def train_board_localizer(
             current_lr = optimizer.param_groups[0]["lr"]
             metrics = {
                 "train_loss": round(train_loss, 5),
+                "train_corner_loss": round(train_corner_loss, 5),
+                "train_edge_loss": round(train_edge_loss, 5),
+                "train_area_loss": round(train_area_loss, 5),
                 "val_loss": round(val_loss, 5),
                 "val_mean_corner_error_px": round(val_mean_corner_error_px, 5),
                 "val_boards_leq_20px": round(val_boards_leq_20px, 5),
@@ -270,7 +343,11 @@ def train_board_localizer(
             log_epoch_metrics(metrics, epoch)
             LOGGER.info(
                 f"Board localizer epoch {epoch}/{epochs} "
-                f"train_loss={train_loss:.4f} val_loss={val_loss:.4f} "
+                f"train_loss={train_loss:.4f} "
+                f"train_corner_loss={train_corner_loss:.4f} "
+                f"train_edge_loss={train_edge_loss:.4f} "
+                f"train_area_loss={train_area_loss:.4f} "
+                f"val_loss={val_loss:.4f} "
                 f"val_mean_corner_error_px={val_mean_corner_error_px:.2f} "
                 f"val_boards_leq_20px={val_boards_leq_20px:.4f} "
                 f"lr={current_lr:.6f}"

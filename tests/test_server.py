@@ -290,6 +290,8 @@ def test_analyze_page_renders_phase_two_flow_shell(client: TestClient) -> None:
     assert "Where did the white king start the game?" in response.text
     assert 'data-detect-endpoint="/detect-board"' in response.text
     assert 'data-analyze-endpoint="/analyze"' in response.text
+    assert 'data-legal-moves-endpoint="/legal-moves"' in response.text
+    assert 'data-play-move-endpoint="/play-move"' in response.text
     assert 'data-explain-endpoint="/explain"' in response.text
     assert '/static/app.css?v=' in response.text
     assert '/static/app.js?v=' in response.text
@@ -299,8 +301,10 @@ def test_analyze_page_renders_phase_two_flow_shell(client: TestClient) -> None:
     assert "New Board" in response.text
     assert "Continue to Analysis" in response.text
     assert "Top Lines" in response.text
-    assert "Explain Best Move" in response.text
-    assert "Compare My Move" in response.text
+    assert "Request an explanation for any suggested line or tap the board" in (
+        response.text
+    )
+    assert "Compare My Move" not in response.text
     assert "Show Structured Breakdown" in response.text
 
 
@@ -483,6 +487,46 @@ def test_analyze_endpoint_returns_score_display(
     assert response.status_code == 200
     payload = response.json()
     assert payload["analysis"]["top_moves"][0]["score_display"] == "+0.35"
+
+
+def test_legal_moves_endpoint_returns_square_level_metadata(client: TestClient) -> None:
+    response = client.post("/legal-moves", json={"fen": STARTING_FEN})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["fen"] == STARTING_FEN
+    assert any(move["uci"] == "e2e4" for move in payload["legal_moves"])
+    assert any(
+        move["from"] == "g1" and move["to"] == "f3" for move in payload["legal_moves"]
+    )
+
+
+def test_play_move_endpoint_applies_legal_move_and_returns_position(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/play-move",
+        json={"fen": STARTING_FEN, "move_uci": "e2e4"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["position"]["fen"] == "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+    assert any(move["uci"] == "c7c5" for move in payload["legal_moves"])
+
+
+def test_play_move_endpoint_rejects_illegal_move(client: TestClient) -> None:
+    response = client.post(
+        "/play-move",
+        json={"fen": STARTING_FEN, "move_uci": "e2e5"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        f"Illegal move 'e2e5' for position {STARTING_FEN!r}."
+    )
 
 
 def test_explain_endpoint_returns_analysis_and_explanation(

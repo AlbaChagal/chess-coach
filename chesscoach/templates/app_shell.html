@@ -22,6 +22,8 @@
       data-vision-endpoint="/vision"
       data-complete-endpoint="/complete-position"
       data-analyze-endpoint="/analyze"
+      data-legal-moves-endpoint="/legal-moves"
+      data-play-move-endpoint="/play-move"
       data-explain-endpoint="/explain"
       data-save-endpoint="/api/saved"
       data-settings-endpoint="/api/settings"
@@ -231,14 +233,21 @@
       </section>
 
       <section class="analyze-step" data-step="ready" hidden>
-        <div class="placeholder-block">
-          <div class="placeholder-illustration saved-stage"></div>
-          <h2>Position Ready</h2>
-          <p>
-            The board image, white-king-start click, and side to move have been
-            combined into a completed position that is ready for the analysis
-            screen in Phase 3.
-          </p>
+        <div class="ready-stage-header">
+          <div class="placeholder-block">
+            <div class="placeholder-illustration saved-stage"></div>
+            <h2>Position Ready</h2>
+            <p>
+              Review the detected reconstruction before analysis. If the vision
+              model missed a piece, open the correction board and patch the
+              position directly.
+            </p>
+          </div>
+          <div class="ready-stage-actions">
+            <button class="secondary-link" data-ready-edit-toggle-button type="button">
+              Correct Position
+            </button>
+          </div>
         </div>
 
         <div class="ready-summary">
@@ -255,6 +264,99 @@
             <code data-ready-en-passant>-</code>
           </div>
         </div>
+
+        <section class="ready-editor" data-ready-editor hidden>
+          <div class="ready-editor-header">
+            <div>
+              <h3>Correction Board</h3>
+              <p class="screen-subheading">
+                Tap any square, then place the correct piece. Changes stay in
+                draft until you apply them.
+              </p>
+            </div>
+            <div class="selection-badge ready-editor-square-badge" data-ready-selected-badge hidden>
+              Editing square: <strong data-ready-selected-square>-</strong>
+            </div>
+          </div>
+
+          <div class="ready-editor-layout">
+            <div class="analysis-board-shell ready-board-shell">
+              <div class="analysis-board ready-board" data-ready-board></div>
+            </div>
+
+            <div class="ready-editor-tools">
+              <div class="ready-editor-copy">
+                <p class="selection-note" data-ready-editor-note>
+                  Tap a square to start correcting the detected position.
+                </p>
+                <p class="selection-note">
+                  TODO: castling rights are still inferred automatically, and
+                  en passant remains disabled for now.
+                </p>
+              </div>
+
+              <div class="piece-palette" data-ready-piece-palette>
+                <button class="piece-chip active" data-ready-piece-button="P" type="button">
+                  ♙ White Pawn
+                </button>
+                <button class="piece-chip" data-ready-piece-button="N" type="button">
+                  ♘ White Knight
+                </button>
+                <button class="piece-chip" data-ready-piece-button="B" type="button">
+                  ♗ White Bishop
+                </button>
+                <button class="piece-chip" data-ready-piece-button="R" type="button">
+                  ♖ White Rook
+                </button>
+                <button class="piece-chip" data-ready-piece-button="Q" type="button">
+                  ♕ White Queen
+                </button>
+                <button class="piece-chip" data-ready-piece-button="K" type="button">
+                  ♔ White King
+                </button>
+                <button class="piece-chip" data-ready-piece-button="p" type="button">
+                  ♟ Black Pawn
+                </button>
+                <button class="piece-chip" data-ready-piece-button="n" type="button">
+                  ♞ Black Knight
+                </button>
+                <button class="piece-chip" data-ready-piece-button="b" type="button">
+                  ♝ Black Bishop
+                </button>
+                <button class="piece-chip" data-ready-piece-button="r" type="button">
+                  ♜ Black Rook
+                </button>
+                <button class="piece-chip" data-ready-piece-button="q" type="button">
+                  ♛ Black Queen
+                </button>
+                <button class="piece-chip" data-ready-piece-button="k" type="button">
+                  ♚ Black King
+                </button>
+                <button class="piece-chip danger-piece-chip" data-ready-piece-button="clear" type="button">
+                  Clear Square
+                </button>
+              </div>
+
+              <p class="form-error" data-ready-error hidden></p>
+              <p class="save-feedback" data-ready-feedback hidden></p>
+
+              <div class="step-actions">
+                <button class="secondary-link" data-ready-cancel-tool-button type="button">
+                  Cancel Tool
+                </button>
+                <button class="secondary-link" data-ready-reset-button type="button">
+                  Reset to Detected
+                </button>
+                <button class="secondary-link" data-ready-cancel-button type="button">
+                  Cancel
+                </button>
+                <button class="primary-button" data-ready-apply-button type="button">
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
 
         <div class="step-actions">
           <button class="secondary-link" data-reset-flow-button>Start Over</button>
@@ -304,49 +406,17 @@
             <div>
               <h3>Insights</h3>
               <p class="screen-subheading">
-                Request an explanation for the best move or compare what you
-                actually played.
+                Request an explanation for any suggested line or tap the board
+                to make a legal move and refresh the top lines from the new
+                position.
               </p>
             </div>
           </div>
 
-          <div class="insight-actions">
-            <button class="primary-button" data-explain-best-button>
-              Explain Best Move
-            </button>
+          <div class="interactive-board-note" data-interactive-board-note>
+            Tap a piece to reveal only its legal destinations. Tap a highlighted
+            square to play that move on the board and re-run analysis.
           </div>
-
-          <form class="played-move-form" data-played-move-form>
-            <div class="played-move-grid">
-              <label class="field">
-                <span>From</span>
-                <select data-played-from-select>
-                  <option value="">Choose square</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>To</span>
-                <select data-played-to-select>
-                  <option value="">Choose square</option>
-                </select>
-              </label>
-            </div>
-            <label class="field">
-              <span>Promotion</span>
-              <select data-played-promotion-select>
-                <option value="">No promotion</option>
-                <option value="q">Queen</option>
-                <option value="r">Rook</option>
-                <option value="b">Bishop</option>
-                <option value="n">Knight</option>
-              </select>
-            </label>
-            <div class="step-actions compact-actions">
-              <button class="secondary-link" type="submit" data-compare-move-button>
-                Compare My Move
-              </button>
-            </div>
-          </form>
 
           <div class="analysis-loading" data-explanation-loading hidden>
             Requesting insight...
