@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "ChessCoach",
+    "slug": "chesscoach-mobile",
+    "scheme": "chesscoach",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        },
+        "NSCameraUsageDescription": "ChessCoach uses the camera to capture chess board positions.",
+        "NSPhotoLibraryUsageDescription": "ChessCoach uses your photos to analyze chess board positions."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#f7f3ea"
+      }
+    },
+    "extra": {
+      "apiUrl": "http://127.0.0.1:8000"
+    },
+    "plugins": [
+      "expo-asset",
+      "expo-secure-store"
+    ]
+  }
+}

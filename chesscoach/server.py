@@ -11,6 +11,7 @@ from typing import Any, Literal, cast
 import chess
 import cv2
 import numpy as np
+import pillow_heif
 from PIL import Image as PILImage
 from PIL import ImageOps
 from fastapi import FastAPI, HTTPException, Request
@@ -58,6 +59,7 @@ LOW_CONFIDENCE_WARNING = PipelineWarning(
 )
 FALLBACK_BOARD_CONFIDENCE = 0.22
 AUTO_BOARD_CONFIDENCE = 0.9
+pillow_heif.register_heif_opener()
 
 
 class ApiImageClick(BaseModel):
@@ -240,15 +242,7 @@ def create_app() -> FastAPI:
             user = app.state.auth_store.create_user(payload.email, payload.password)
         except AuthError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        response = JSONResponse(
-            {
-                "status": "success",
-                "user": {"id": user.id, "email": user.email},
-                "redirect_to": "/app/analyze",
-            }
-        )
-        _set_session_cookie(response, user)
-        return response
+        return _auth_success_response(user)
 
     @app.post("/auth/login")
     def login(payload: LoginRequest) -> JSONResponse:
@@ -259,15 +253,7 @@ def create_app() -> FastAPI:
             )
         except AuthError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
-        response = JSONResponse(
-            {
-                "status": "success",
-                "user": {"id": user.id, "email": user.email},
-                "redirect_to": "/app/analyze",
-            }
-        )
-        _set_session_cookie(response, user)
-        return response
+        return _auth_success_response(user)
 
     @app.get("/auth/me")
     def auth_me(request: Request) -> JSONResponse:
@@ -628,10 +614,27 @@ def _initialize_auth_store() -> AuthStore:
     return store
 
 
-def _set_session_cookie(response: JSONResponse, user: UserRecord) -> None:
+def _auth_success_response(user: UserRecord) -> JSONResponse:
+    """Return auth success data for browsers and native clients."""
+    session_cookie_value = encode_session_cookie(user)
+    response = JSONResponse(
+        {
+            "status": "success",
+            "user": {"id": user.id, "email": user.email},
+            "redirect_to": "/app/analyze",
+            "native_session_cookie": (
+                f"{DEFAULT_SESSION_COOKIE}={session_cookie_value}"
+            ),
+        }
+    )
+    _set_session_cookie(response, session_cookie_value)
+    return response
+
+
+def _set_session_cookie(response: JSONResponse, cookie_value: str) -> None:
     response.set_cookie(
         key=DEFAULT_SESSION_COOKIE,
-        value=encode_session_cookie(user),
+        value=cookie_value,
         httponly=True,
         samesite="lax",
         path="/",
@@ -720,6 +723,7 @@ def _decode_image_base64(image_base64: str) -> bytes:
     encoded = image_base64
     if "," in image_base64 and ";base64" in image_base64:
         encoded = image_base64.split(",", maxsplit=1)[1]
+    encoded = "".join(encoded.split())
     try:
         return base64.b64decode(encoded, validate=True)
     except (ValueError, binascii.Error) as exc:
@@ -735,10 +739,39 @@ def _decode_image_base64_to_bgr(image_base64: str) -> np.ndarray:
         with PILImage.open(BytesIO(image_bytes)) as image:
             normalized = ImageOps.exif_transpose(image).convert("RGB")
     except (OSError, ValueError):
-        raise HTTPException(status_code=400, detail="Invalid image_base64 payload.")
+        detected_type = _sniff_image_type(image_bytes)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Unsupported image payload. Expected JPEG or PNG bytes but "
+                f"received {detected_type} data ({len(image_bytes)} bytes)."
+            ),
+        )
     rgb = np.array(normalized)
     bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
     return bgr
+
+
+def _sniff_image_type(image_bytes: bytes) -> str:
+    """Return a small diagnostic image type from common file signatures."""
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if len(image_bytes) >= 12 and image_bytes[4:12] in {
+        b"ftypheic",
+        b"ftypheix",
+        b"ftyphevc",
+        b"ftyphevx",
+        b"ftypmif1",
+        b"ftypmsf1",
+    }:
+        return "heic"
+    if image_bytes.startswith(b"GIF87a") or image_bytes.startswith(b"GIF89a"):
+        return "gif"
+    if image_bytes.startswith(b"RIFF") and image_bytes[8:12] == b"WEBP":
+        return "webp"
+    return "unknown"
 
 
 def _to_image_click(click: ApiImageClick) -> ImageClick:

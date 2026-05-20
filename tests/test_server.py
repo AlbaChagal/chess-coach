@@ -5,6 +5,7 @@ from io import BytesIO
 
 import cv2
 import numpy as np
+import pillow_heif
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image as PILImage
@@ -55,6 +56,14 @@ def _oriented_image_payload(width: int, height: int, orientation: int) -> str:
     exif[274] = orientation
     buffer = BytesIO()
     image.save(buffer, format="JPEG", exif=exif)
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def _heic_image_payload() -> str:
+    pillow_heif.register_heif_opener()
+    image = PILImage.new("RGB", (40, 40), color=(255, 0, 0))
+    buffer = BytesIO()
+    image.save(buffer, format="HEIF")
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
@@ -173,7 +182,28 @@ def test_signup_creates_user_and_session(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json()["user"]["email"] == "user@example.com"
+    assert response.json()["native_session_cookie"].startswith(
+        "chesscoach_session="
+    )
     assert "chesscoach_session" in response.cookies
+
+
+def test_native_session_cookie_authenticates_api_requests(
+    client: TestClient,
+) -> None:
+    signup = client.post(
+        "/auth/signup",
+        json={"email": "native@example.com", "password": "strongpass"},
+    )
+    client.post("/auth/logout")
+
+    response = client.get(
+        "/api/settings",
+        headers={"cookie": signup.json()["native_session_cookie"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["settings"]["show_coordinates"] is True
 
 
 def test_signup_rejects_duplicate_email(client: TestClient) -> None:
@@ -321,6 +351,45 @@ def test_detect_board_endpoint_returns_corners_for_detectable_board(
     assert payload["status"] == "success"
     assert len(payload["detection"]["board_corners"]) == 4
     assert payload["detection"]["confidence"] == 0.9
+
+
+def test_detect_board_endpoint_accepts_data_url_with_wrapped_base64(
+    client: TestClient,
+) -> None:
+    payload = _board_payload(make_synthetic_board())
+    wrapped = "\n".join(payload[index : index + 64] for index in range(0, len(payload), 64))
+
+    response = client.post(
+        "/detect-board",
+        json={"image_base64": f"data:image/png;base64,{wrapped}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+
+
+def test_detect_board_endpoint_accepts_heic_payload(
+    client: TestClient, monkeypatch
+) -> None:
+    captured: dict[str, tuple[int, int]] = {}
+
+    def _detect_board_corners(image):
+        captured["shape"] = image.shape[:2]
+        return np.array(
+            [[0.0, 0.0], [39.0, 0.0], [39.0, 39.0], [0.0, 39.0]],
+            dtype=np.float32,
+        )
+
+    monkeypatch.setattr("chesscoach.server.detect_board_corners", _detect_board_corners)
+
+    response = client.post(
+        "/detect-board",
+        json={"image_base64": f"data:image/heic;base64,{_heic_image_payload()}"},
+    )
+
+    assert response.status_code == 200
+    assert captured["shape"] == (40, 40)
+    assert response.json()["status"] == "success"
 
 
 def test_detect_board_endpoint_returns_warning_on_failure(client: TestClient) -> None:
