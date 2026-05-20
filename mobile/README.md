@@ -79,6 +79,35 @@ Run the mobile JS tests:
 npm test
 ```
 
+## Build Profiles
+
+This app now includes EAS build profiles in `eas.json`:
+
+- `development`
+- `preview`
+- `production`
+
+Preview build commands:
+
+```bash
+npm run build:ios:preview
+npm run build:android:preview
+```
+
+Production build commands:
+
+```bash
+npm run build:ios:production
+npm run build:android:production
+```
+
+Before running remote builds, set the expected environment values locally or in
+your EAS environment:
+
+```bash
+cp .env.example .env.local
+```
+
 ## Notes
 
 - This app currently depends on the repository backend for auth, analysis,

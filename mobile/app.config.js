@@ -11,11 +11,19 @@ const ANDROID_PACKAGE =
 export default {
   expo: {
     name: "ChessCoach",
+    description:
+      "Analyze real chess positions from a photo with board detection, engine analysis, and coaching explanations.",
     slug: "chesscoach-mobile",
     scheme: "chesscoach",
     version: "0.1.0",
     orientation: "portrait",
     userInterfaceStyle: "light",
+    icon: "./assets/icon.png",
+    splash: {
+      image: "./assets/splash-icon.png",
+      resizeMode: "contain",
+      backgroundColor: "#f7f3ea"
+    },
     ios: {
       bundleIdentifier: IOS_BUNDLE_ID,
       buildNumber: "1",
@@ -34,6 +42,7 @@ export default {
       package: ANDROID_PACKAGE,
       versionCode: 1,
       adaptiveIcon: {
+        foregroundImage: "./assets/adaptive-icon.png",
         backgroundColor: "#f7f3ea"
       }
     },

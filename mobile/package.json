@@ -10,8 +10,10 @@
     "android": "expo start --android",
     "export:ios": "expo export --platform ios",
     "export:android": "expo export --platform android",
-    "build:ios:preview": "eas build --platform ios --profile preview",
-    "build:android:preview": "eas build --platform android --profile preview",
+    "build:ios:preview": "npx eas build --platform ios --profile preview",
+    "build:android:preview": "npx eas build --platform android --profile preview",
+    "build:ios:production": "npx eas build --platform ios --profile production",
+    "build:android:production": "npx eas build --platform android --profile production",
     "test": "node --test \"src/**/*.test.js\""
   },
   "dependencies": {
