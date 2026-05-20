@@ -11,9 +11,13 @@ const SESSION_COOKIE_KEY = "chesscoach.sessionCookie";
 const API_URL_KEY = "chesscoach.apiUrl";
 
 function configuredApiUrl() {
-  const configured = process.env.EXPO_PUBLIC_CHESSCOACH_API_URL;
-  if (configured) {
-    return normalizeBaseUrl(configured);
+  const envConfigured = process.env.EXPO_PUBLIC_CHESSCOACH_API_URL;
+  if (envConfigured) {
+    return normalizeBaseUrl(envConfigured);
+  }
+  const extraConfigured = Constants.expoConfig?.extra?.apiUrl;
+  if (extraConfigured) {
+    return normalizeBaseUrl(extraConfigured);
   }
   return null;
 }

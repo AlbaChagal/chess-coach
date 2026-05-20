@@ -8,6 +8,10 @@
     "start": "expo start",
     "ios": "expo start --ios",
     "android": "expo start --android",
+    "export:ios": "expo export --platform ios",
+    "export:android": "expo export --platform android",
+    "build:ios:preview": "eas build --platform ios --profile preview",
+    "build:android:preview": "eas build --platform android --profile preview",
     "test": "node --test \"src/**/*.test.js\""
   },
   "dependencies": {
