@@ -19,9 +19,13 @@ export function LoginScreen({ navigation }) {
     setBusy(true);
     try {
       const payload = await api.login(email.trim(), password);
+      try {
+        const settingsPayload = await api.loadSettings();
+        setSettings(settingsPayload.settings);
+      } catch {
+        setSettings({ show_coordinates: true });
+      }
       setUser(payload.user);
-      const settingsPayload = await api.loadSettings();
-      setSettings(settingsPayload.settings);
     } catch (error) {
       Alert.alert("Login failed", error.message);
     } finally {

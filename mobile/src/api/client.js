@@ -9,6 +9,7 @@ import {
 
 const SESSION_COOKIE_KEY = "chesscoach.sessionCookie";
 const API_URL_KEY = "chesscoach.apiUrl";
+const REQUEST_TIMEOUT_MS = 10000;
 
 function configuredApiUrl() {
   const envConfigured = process.env.EXPO_PUBLIC_CHESSCOACH_API_URL;
@@ -44,18 +45,25 @@ export class ChessCoachApi {
     this.sessionCookie = null;
   }
 
-  async restoreConfig() {
+  async preferredBaseUrl() {
+    const storedBaseUrl = await SecureStore.getItemAsync(API_URL_KEY);
+    if (storedBaseUrl && !isLoopbackUrl(storedBaseUrl)) {
+      const normalized = normalizeBaseUrl(storedBaseUrl);
+      this.baseUrl = normalized;
+      return normalized;
+    }
     const configured = configuredApiUrl();
     if (configured) {
       this.baseUrl = configured;
-      return this.restoreSession();
+      return configured;
     }
-    const storedBaseUrl = await SecureStore.getItemAsync(API_URL_KEY);
-    if (storedBaseUrl && !isLoopbackUrl(storedBaseUrl)) {
-      this.baseUrl = normalizeBaseUrl(storedBaseUrl);
-    } else {
-      this.baseUrl = deriveDefaultApiUrl();
-    }
+    const derived = deriveDefaultApiUrl();
+    this.baseUrl = derived;
+    return derived;
+  }
+
+  async restoreConfig() {
+    await this.preferredBaseUrl();
     return this.restoreSession();
   }
 
@@ -210,20 +218,26 @@ export class ChessCoachApi {
   }
 
   async request(path, options = {}) {
+    const baseUrl = await this.preferredBaseUrl();
     const headers = {
       Accept: "application/json",
       ...(options.body ? { "Content-Type": "application/json" } : {}),
       ...(this.sessionCookie ? { Cookie: this.sessionCookie } : {})
     };
     let response;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
-      response = await fetch(`${this.baseUrl}${path}`, {
+      response = await fetch(`${baseUrl}${path}`, {
         method: options.method || "GET",
         headers,
-        body: options.body ? JSON.stringify(options.body) : undefined
+        body: options.body ? JSON.stringify(options.body) : undefined,
+        signal: controller.signal
       });
     } catch (error) {
-      throw new Error(networkErrorMessage(this.baseUrl), { cause: error });
+      throw new Error(networkErrorMessage(baseUrl), { cause: error });
+    } finally {
+      clearTimeout(timeoutId);
     }
 
     if (options.captureCookie) {

@@ -153,6 +153,7 @@ class AuthStore:
             raise AuthError("Invalid email or password.")
         return _user_record_from_row(row)
 
+
     def get_user_by_id(self, user_id: int) -> UserRecord | None:
         """Look up a user by primary key."""
         with self._connect() as connection:

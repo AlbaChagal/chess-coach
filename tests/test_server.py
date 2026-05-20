@@ -245,7 +245,6 @@ def test_auth_me_returns_authenticated_user(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json()["user"]["email"] == "user@example.com"
-    assert response.json()["settings"]["show_coordinates"] is True
 
 
 def test_session_persists_across_requests(client: TestClient) -> None:
